@@ -25,10 +25,10 @@ if [ -d "$WORKSPACE" ]; then
   WORKSPACE="$(cd "$WORKSPACE" && pwd)"
 fi
 PROGRESS_LOG="${WORKSPACE}/progress.log"
+PHASE_LABEL="Phase 2"
 
-log() {
-  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*" | tee -a "$PROGRESS_LOG"
-}
+# shellcheck source=lib/phase-common.sh
+source "${SCRIPT_DIR}/lib/phase-common.sh"
 
 log "Phase 2: Starting cross-pollination refinement"
 
@@ -73,46 +73,41 @@ if [ -f "$CLAUDE_REPORT" ] && [ -s "$CLAUDE_REPORT" ]; then
 
   echo "1" > "$CLAUDE_STATE"
 
-  cat > "$CLAUDE_SETTINGS" << SETTINGS_EOF
-{
-  "hooks": {
-    "Stop": [{
-      "hooks": [{
-        "type": "command",
-        "command": "${PLUGIN_ROOT}/scripts/claude-stop-hook.sh",
-        "timeout": 120
-      }]
-    }]
-  }
-}
-SETTINGS_EOF
+  write_claude_settings "$CLAUDE_SETTINGS" "$PLUGIN_ROOT"
 
   CLAUDE_REFINE_PROMPT="$(build_refinement_prompt "$CLAUDE_REPORT" "Claude" "$CODEX_REPORT" "Codex" "$GEMINI_REPORT" "Gemini" "$CLAUDE_REFINED")"
 
-  log "Phase 2: Launching Claude refinement agent"
+  CLAUDE_EFFORT_FLAG=""
+  if [ "${RESEARCH_TEST_MODE:-false}" = "true" ]; then
+    CLAUDE_EFFORT_FLAG="--effort low"
+  fi
+
+  log "Phase 2: Launching Claude refinement agent${CLAUDE_EFFORT_FLAG:+ (effort=low)}"
 
   (
     RESEARCH_REPORT_PATH="$CLAUDE_REFINED" \
     RESEARCH_STATE_PATH="$CLAUDE_STATE" \
     RESEARCH_MAX_ITERS="$MAX_ITERS" \
+    RESEARCH_PROGRESS_LOG="$PROGRESS_LOG" \
+    RESEARCH_HOOK_FORMAT=claude \
     env -u CLAUDECODE claude -p \
       --model "$CLAUDE_MODEL" \
+      $CLAUDE_EFFORT_FLAG \
       --dangerously-skip-permissions \
       --settings "$CLAUDE_SETTINGS" \
       --max-turns 200 \
       "$CLAUDE_REFINE_PROMPT" > "${WORKSPACE}/claude-refine-stdout.log" 2>&1
-    log "Phase 2: Claude refinement finished (exit $?)"
+    rc=$?
+    log "Phase 2: Claude refinement finished (exit $rc)"
+    exit $rc
   ) &
-  CLAUDE_PID=$!
+  register_agent claude $! "${WORKSPACE}/claude-refine-stdout.log"
 else
   log "Phase 2: Skipping Claude refinement (no Phase 1 report)"
-  CLAUDE_PID=""
 fi
 
 # ── Launch Codex refinement ───────────────────────────────────────────────
 if [ -f "$CODEX_REPORT" ] && [ -s "$CODEX_REPORT" ]; then
-  # For Codex, we build a combined prompt that includes the refinement instructions
-  # and tells it to read all reports
   CODEX_REFINE_PROMPT="$(build_refinement_prompt "$CODEX_REPORT" "Codex" "$CLAUDE_REPORT" "Claude" "$GEMINI_REPORT" "Gemini" "$CODEX_REFINED")"
 
   log "Phase 2: Launching Codex refinement agent"
@@ -120,18 +115,20 @@ if [ -f "$CODEX_REPORT" ] && [ -s "$CODEX_REPORT" ]; then
   (
     cd "$PROJECT_DIR"
     bash "${PLUGIN_ROOT}/scripts/codex-wrapper.sh" \
-      "REFINEMENT TASK: ${CODEX_REFINE_PROMPT}" \
+      "$CODEX_REFINE_PROMPT" \
       "$CODEX_REFINED" \
       "$MAX_ITERS" \
       "$CODEX_MODEL" \
       "$CODEX_REASONING" \
-      "$PROGRESS_LOG" > "${WORKSPACE}/codex-refine-stdout.log" 2>&1
-    log "Phase 2: Codex refinement finished (exit $?)"
+      "$PROGRESS_LOG" \
+      "$TOPIC" > "${WORKSPACE}/codex-refine-stdout.log" 2>&1
+    rc=$?
+    log "Phase 2: Codex refinement finished (exit $rc)"
+    exit $rc
   ) &
-  CODEX_PID=$!
+  register_agent codex $! "${WORKSPACE}/codex-refine-stdout.log"
 else
   log "Phase 2: Skipping Codex refinement (no Phase 1 report)"
-  CODEX_PID=""
 fi
 
 # ── Launch Gemini refinement ──────────────────────────────────────────────
@@ -141,47 +138,20 @@ if [ -f "$GEMINI_REPORT" ] && [ -s "$GEMINI_REPORT" ]; then
   GEMINI_LOCAL_REFINED="refined-report.md"
 
   echo "1" > "$GEMINI_STATE"
-  mkdir -p "${GEMINI_WORKSPACE}/.gemini"
+  write_gemini_settings "$GEMINI_WORKSPACE" "$PLUGIN_ROOT" "refinement-loop"
 
   # Copy input reports INTO Gemini workspace (sandbox can't read outside)
   cp "$GEMINI_REPORT" "${GEMINI_WORKSPACE}/own-report.md" 2>/dev/null || true
   cp "$CLAUDE_REPORT" "${GEMINI_WORKSPACE}/claude-report.md" 2>/dev/null || true
   cp "$CODEX_REPORT" "${GEMINI_WORKSPACE}/codex-report.md" 2>/dev/null || true
 
-  cat > "${GEMINI_WORKSPACE}/.gemini/settings.json" << GEMINI_SETTINGS_EOF
-{
-  "hooksConfig": {"enabled": true},
-  "hooks": {
-    "AfterAgent": [{
-      "matcher": "*",
-      "hooks": [{
-        "name": "refinement-loop",
-        "type": "command",
-        "command": "${PLUGIN_ROOT}/scripts/gemini-afteragent-hook.sh",
-        "timeout": 30000
-      }]
-    }]
-  }
-}
-GEMINI_SETTINGS_EOF
+  # Use the shared helper with local paths (Gemini sandbox can't read outside its workspace)
+  GEMINI_REFINE_PROMPT="$(build_refinement_prompt \
+    "own-report.md" "Gemini" "claude-report.md" "Claude" "codex-report.md" "Codex" "$GEMINI_LOCAL_REFINED")"
 
-  # Build prompt with LOCAL paths (relative to Gemini workspace)
-  GEMINI_REFINE_PROMPT="${REFINEMENT_PROMPT}
-
-## Research Topic
-${TOPIC}
-
-## Files
-- Your original report (Gemini): own-report.md
-- Other report (Claude): claude-report.md
-- Other report (Codex): codex-report.md
-- Write your REFINED report to: ${GEMINI_LOCAL_REFINED}
-
-Read all three reports, then write your refined report to ${GEMINI_LOCAL_REFINED}."
-
-  cat > "${GEMINI_WORKSPACE}/GEMINI.md" << GEMINI_MD_EOF
-${REFINEMENT_PROMPT}
-GEMINI_MD_EOF
+  # Write full prompt (system + topic + file paths) to GEMINI.md for consistency
+  # with the research phase — Gemini may read GEMINI.md as system instructions.
+  printf '%s\n' "$GEMINI_REFINE_PROMPT" > "${GEMINI_WORKSPACE}/GEMINI.md"
 
   log "Phase 2: Launching Gemini refinement agent"
 
@@ -191,6 +161,7 @@ GEMINI_MD_EOF
     RESEARCH_STATE_PATH="$GEMINI_STATE" \
     RESEARCH_MAX_ITERS="$MAX_ITERS" \
     RESEARCH_PROGRESS_LOG="$PROGRESS_LOG" \
+    RESEARCH_HOOK_FORMAT=gemini \
     gemini --model "$GEMINI_MODEL" --approval-mode=yolo \
       "$GEMINI_REFINE_PROMPT" > "${WORKSPACE}/gemini-refine-stdout.log" 2>&1
     GEMINI_EXIT=$?
@@ -199,25 +170,20 @@ GEMINI_MD_EOF
       cp "${GEMINI_LOCAL_REFINED}" "${GEMINI_REFINED}"
     fi
     log "Phase 2: Gemini refinement finished (exit $GEMINI_EXIT)"
+    exit $GEMINI_EXIT
   ) &
-  GEMINI_PID=$!
+  register_agent gemini $! "${WORKSPACE}/gemini-refine-stdout.log"
 else
   log "Phase 2: Skipping Gemini refinement (no Phase 1 report)"
-  GEMINI_PID=""
 fi
 
-# ── Wait for all agents ──────────────────────────────────────────────────
-PIDS_TO_WAIT=()
-[ -n "${CLAUDE_PID:-}" ] && PIDS_TO_WAIT+=("$CLAUDE_PID")
-[ -n "${CODEX_PID:-}" ] && PIDS_TO_WAIT+=("$CODEX_PID")
-[ -n "${GEMINI_PID:-}" ] && PIDS_TO_WAIT+=("$GEMINI_PID")
+# ── Wait for agents ──────────────────────────────────────────────────────
+record_pids
 
-log "Phase 2: Waiting for ${#PIDS_TO_WAIT[@]} refinement agents"
-
-FAILURES=0
-for pid in "${PIDS_TO_WAIT[@]}"; do
-  wait "$pid" || FAILURES=$((FAILURES + 1))
-done
+wait_for_agents || {
+  # All agents crashed at startup
+  exit 1
+}
 
 # ── Report results ────────────────────────────────────────────────────────
 REFINED_FOUND=0
@@ -238,4 +204,5 @@ for f in "$CLAUDE_REFINED" "$CODEX_REFINED" "$GEMINI_REFINED"; do
   fi
 done
 
+rm -f "${WORKSPACE}/agent-pids.txt"
 log "Phase 2: Complete (${REFINED_FOUND}/3 refined reports, ${FAILURES} failures)"

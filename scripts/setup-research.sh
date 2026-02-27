@@ -115,6 +115,120 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
   echo ""
 fi
 
+# ── Smoke-test API connectivity ──────────────────────────────────────────
+# Run a single cheap prompt against each CLI to verify auth/quota before
+# creating any workspace or launching expensive agents.
+
+echo "Running pre-flight smoke tests..."
+echo ""
+
+SMOKE_DIR="$(mktemp -d)"
+trap 'rm -rf "$SMOKE_DIR"' EXIT
+
+# macOS ships without GNU timeout; use perl fallback
+if command -v timeout &>/dev/null; then
+  TIMEOUT_CMD="timeout"
+elif ! command -v perl &>/dev/null; then
+  echo "Error: Neither 'timeout' (GNU coreutils) nor 'perl' found."
+  echo "Install GNU coreutils: brew install coreutils"
+  exit 1
+else
+  # Create a small timeout wrapper script that subshells can call
+  TIMEOUT_CMD="${SMOKE_DIR}/timeout-wrapper"
+  cat > "$TIMEOUT_CMD" << 'WRAPPER_EOF'
+#!/usr/bin/env bash
+secs="$1"; shift
+perl -e 'alarm shift; exec @ARGV' -- "$secs" "$@"
+WRAPPER_EOF
+  chmod +x "$TIMEOUT_CMD"
+fi
+
+smoke_claude() {
+  local start=$SECONDS
+  (
+    unset CLAUDECODE
+    "$TIMEOUT_CMD" 60 claude -p \
+      --model claude-haiku-4-5-20251001 \
+      --max-turns 1 \
+      "Reply with OK"
+  ) > "$SMOKE_DIR/claude.out" 2>&1
+  echo $? > "$SMOKE_DIR/claude.exit"
+  echo $((SECONDS - start)) > "$SMOKE_DIR/claude.time"
+}
+
+smoke_codex() {
+  local start=$SECONDS
+  "$TIMEOUT_CMD" 60 codex exec \
+    --model gpt-5.1-codex-mini \
+    -c model_reasoning_effort=low \
+    --full-auto --skip-git-repo-check \
+    "Reply with OK" > "$SMOKE_DIR/codex.out" 2>&1
+  echo $? > "$SMOKE_DIR/codex.exit"
+  echo $((SECONDS - start)) > "$SMOKE_DIR/codex.time"
+}
+
+smoke_gemini() {
+  local start=$SECONDS
+  "$TIMEOUT_CMD" 60 gemini -p \
+    "Reply with OK" \
+    --model gemini-2.5-flash-lite > "$SMOKE_DIR/gemini.out" 2>&1
+  echo $? > "$SMOKE_DIR/gemini.exit"
+  echo $((SECONDS - start)) > "$SMOKE_DIR/gemini.time"
+}
+
+# Run all 3 in parallel
+smoke_claude &
+smoke_codex &
+smoke_gemini &
+wait
+
+SMOKE_FAILURES=()
+
+for agent in claude codex gemini; do
+  EXIT_CODE=$(cat "$SMOKE_DIR/${agent}.exit" 2>/dev/null || echo 1)
+  ELAPSED=$(cat "$SMOKE_DIR/${agent}.time" 2>/dev/null || echo "?")
+
+  if [ "$EXIT_CODE" -eq 0 ]; then
+    echo "  ✓ ${agent} — OK (${ELAPSED}s)"
+  else
+    echo "  ✗ ${agent} — FAILED (exit ${EXIT_CODE}, ${ELAPSED}s)"
+    LAST_LINES=$(tail -5 "$SMOKE_DIR/${agent}.out" 2>/dev/null || echo "(no output)")
+    echo "    Last output:"
+    echo "$LAST_LINES" | sed 's/^/      /'
+    SMOKE_FAILURES+=("$agent")
+  fi
+done
+
+echo ""
+
+if [ ${#SMOKE_FAILURES[@]} -gt 0 ]; then
+  echo "Error: Smoke tests failed for: ${SMOKE_FAILURES[*]}"
+  echo ""
+  echo "Fix instructions:"
+  for agent in "${SMOKE_FAILURES[@]}"; do
+    case "$agent" in
+      claude)
+        echo "  claude: Verify your Anthropic API key and account quota."
+        echo "          Run: claude -p --model claude-haiku-4-5-20251001 --max-turns 1 'Reply with OK'"
+        ;;
+      codex)
+        echo "  codex:  Verify your OpenAI API key and account quota."
+        echo "          Run: codex exec --model gpt-5.1-codex-mini --full-auto --skip-git-repo-check 'Reply with OK'"
+        ;;
+      gemini)
+        echo "  gemini: Verify your Gemini API key (GEMINI_API_KEY or GOOGLE_API_KEY) or OAuth setup."
+        echo "          Run: gemini -p 'Reply with OK' --model gemini-2.5-flash-lite"
+        ;;
+    esac
+  done
+  echo ""
+  echo "All agents must pass smoke tests before launching a research session."
+  exit 1
+fi
+
+echo "All smoke tests passed — agents are ready."
+echo ""
+
 # ── Generate unique research ID ──────────────────────────────────────────
 if command -v openssl &>/dev/null; then
   RAND_HEX=$(openssl rand -hex 3)
@@ -143,24 +257,27 @@ fi
 # ── Create workspace ─────────────────────────────────────────────────────
 WORKSPACE="research/${RESEARCH_ID}"
 mkdir -p "$WORKSPACE" .claude
+rm -f .claude/deep-research.lock
 
 # ── Create state file ────────────────────────────────────────────────────
+STATE_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > .claude/deep-research.local.md << STATE_EOF
 ---
 active: true
 phase: research
 research_id: ${RESEARCH_ID}
+session_id:
 test_mode: ${TEST_MODE}
 max_iterations: ${MAX_ITERS}
 claude_model: ${CLAUDE_MODEL}
 codex_model: ${CODEX_MODEL}
 codex_reasoning: ${CODEX_REASONING}
 gemini_model: ${GEMINI_MODEL}
-started_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+started_at: ${STATE_TIMESTAMP}
 ---
-
-${TOPIC}
 STATE_EOF
+# Append topic separately (user-controlled data kept out of heredoc)
+printf '\n%s\n' "$TOPIC" >> .claude/deep-research.local.md
 
 # ── Report success ───────────────────────────────────────────────────────
 echo ""

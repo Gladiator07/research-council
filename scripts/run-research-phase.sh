@@ -19,17 +19,13 @@ CODEX_REASONING="$6"
 GEMINI_MODEL="$7"
 
 WORKSPACE="${PROJECT_DIR}/research/${RESEARCH_ID}"
-PROGRESS_LOG="${WORKSPACE}/progress.log"
-
 mkdir -p "$WORKSPACE"
-
-# Ensure WORKSPACE is absolute (needed for agents that cd elsewhere)
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
 PROGRESS_LOG="${WORKSPACE}/progress.log"
+PHASE_LABEL="Phase 1"
 
-log() {
-  echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] $*" | tee -a "$PROGRESS_LOG"
-}
+# shellcheck source=lib/phase-common.sh
+source "${SCRIPT_DIR}/lib/phase-common.sh"
 
 log "Phase 1: Starting initial research"
 log "  Topic: ${TOPIC}"
@@ -54,35 +50,33 @@ CLAUDE_SETTINGS="${WORKSPACE}/claude-settings.json"
 
 echo "1" > "$CLAUDE_STATE"
 
-cat > "$CLAUDE_SETTINGS" << SETTINGS_EOF
-{
-  "hooks": {
-    "Stop": [{
-      "hooks": [{
-        "type": "command",
-        "command": "${PLUGIN_ROOT}/scripts/claude-stop-hook.sh",
-        "timeout": 120
-      }]
-    }]
-  }
-}
-SETTINGS_EOF
+write_claude_settings "$CLAUDE_SETTINGS" "$PLUGIN_ROOT"
 
-log "Phase 1: Launching Claude agent (${CLAUDE_MODEL})"
+CLAUDE_EFFORT_FLAG=""
+if [ "${RESEARCH_TEST_MODE:-false}" = "true" ]; then
+  CLAUDE_EFFORT_FLAG="--effort low"
+fi
+
+log "Phase 1: Launching Claude agent (${CLAUDE_MODEL}${CLAUDE_EFFORT_FLAG:+ effort=low})"
 
 (
   RESEARCH_REPORT_PATH="$CLAUDE_REPORT" \
   RESEARCH_STATE_PATH="$CLAUDE_STATE" \
   RESEARCH_MAX_ITERS="$MAX_ITERS" \
+  RESEARCH_PROGRESS_LOG="$PROGRESS_LOG" \
+  RESEARCH_HOOK_FORMAT=claude \
   env -u CLAUDECODE claude -p \
     --model "$CLAUDE_MODEL" \
+    $CLAUDE_EFFORT_FLAG \
     --dangerously-skip-permissions \
     --settings "$CLAUDE_SETTINGS" \
     --max-turns 200 \
     "${RESEARCH_PROMPT}
 
 Write your report to: ${CLAUDE_REPORT}" > "${WORKSPACE}/claude-stdout.log" 2>&1
-  log "Phase 1: Claude agent finished (exit $?)"
+  rc=$?
+  log "Phase 1: Claude agent finished (exit $rc)"
+  exit $rc
 ) &
 CLAUDE_PID=$!
 
@@ -91,16 +85,23 @@ CODEX_REPORT="${WORKSPACE}/codex-report.md"
 
 log "Phase 1: Launching Codex agent (${CODEX_MODEL}, reasoning: ${CODEX_REASONING})"
 
+CODEX_PROMPT="${RESEARCH_PROMPT}
+
+Write your report to: ${CODEX_REPORT}"
+
 (
   cd "$PROJECT_DIR"
   bash "${PLUGIN_ROOT}/scripts/codex-wrapper.sh" \
-    "$TOPIC" \
+    "$CODEX_PROMPT" \
     "$CODEX_REPORT" \
     "$MAX_ITERS" \
     "$CODEX_MODEL" \
     "$CODEX_REASONING" \
-    "$PROGRESS_LOG" > "${WORKSPACE}/codex-stdout.log" 2>&1
-  log "Phase 1: Codex agent finished (exit $?)"
+    "$PROGRESS_LOG" \
+    "$TOPIC" > "${WORKSPACE}/codex-stdout.log" 2>&1
+  rc=$?
+  log "Phase 1: Codex agent finished (exit $rc)"
+  exit $rc
 ) &
 CODEX_PID=$!
 
@@ -110,42 +111,14 @@ GEMINI_STATE="${WORKSPACE}/gemini-state.txt"
 GEMINI_WORKSPACE="${WORKSPACE}/gemini-workspace"
 
 echo "1" > "$GEMINI_STATE"
-mkdir -p "${GEMINI_WORKSPACE}/.gemini"
+write_gemini_settings "$GEMINI_WORKSPACE" "$PLUGIN_ROOT" "research-loop"
 
-# Create isolated Gemini settings with AfterAgent hook
-cat > "${GEMINI_WORKSPACE}/.gemini/settings.json" << GEMINI_SETTINGS_EOF
-{
-  "hooksConfig": {"enabled": true},
-  "hooks": {
-    "AfterAgent": [{
-      "matcher": "*",
-      "hooks": [{
-        "name": "research-loop",
-        "type": "command",
-        "command": "${PLUGIN_ROOT}/scripts/gemini-afteragent-hook.sh",
-        "timeout": 30000
-      }]
-    }]
-  }
-}
-GEMINI_SETTINGS_EOF
-
-# Gemini writes to a local file in its workspace (sandbox restriction),
-# then we copy it to the expected location after Gemini finishes.
 GEMINI_LOCAL_REPORT="report.md"
 
-# Create GEMINI.md in the workspace with research instructions
-cat > "${GEMINI_WORKSPACE}/GEMINI.md" << GEMINI_MD_EOF
-$(cat "${PLUGIN_ROOT}/prompts/research-system.md")
-
-## Your Research Topic
-
-${TOPIC}
-
-## Output
-
-Write your report to: ${GEMINI_LOCAL_REPORT}
-GEMINI_MD_EOF
+# Build GEMINI.md without embedding user topic in a heredoc
+cat "${PLUGIN_ROOT}/prompts/research-system.md" > "${GEMINI_WORKSPACE}/GEMINI.md"
+printf '\n## Your Research Topic\n\n%s\n\n## Output\n\nWrite your report to: %s\n' \
+  "$TOPIC" "$GEMINI_LOCAL_REPORT" >> "${GEMINI_WORKSPACE}/GEMINI.md"
 
 log "Phase 1: Launching Gemini agent (${GEMINI_MODEL})"
 
@@ -155,26 +128,31 @@ log "Phase 1: Launching Gemini agent (${GEMINI_MODEL})"
   RESEARCH_STATE_PATH="$GEMINI_STATE" \
   RESEARCH_MAX_ITERS="$MAX_ITERS" \
   RESEARCH_PROGRESS_LOG="$PROGRESS_LOG" \
+  RESEARCH_HOOK_FORMAT=gemini \
   gemini --model "$GEMINI_MODEL" --approval-mode=yolo \
     "Conduct deep research on: ${TOPIC}. Write your comprehensive report to ${GEMINI_LOCAL_REPORT}." \
     > "${WORKSPACE}/gemini-stdout.log" 2>&1
   GEMINI_EXIT=$?
-  # Copy report from Gemini workspace to expected location
   if [ -f "${GEMINI_LOCAL_REPORT}" ] && [ -s "${GEMINI_LOCAL_REPORT}" ]; then
     cp "${GEMINI_LOCAL_REPORT}" "${GEMINI_REPORT}"
   fi
   log "Phase 1: Gemini agent finished (exit $GEMINI_EXIT)"
+  exit $GEMINI_EXIT
 ) &
 GEMINI_PID=$!
 
-# ── Wait for all agents ──────────────────────────────────────────────────
+# ── Register agents and wait ─────────────────────────────────────────────
+register_agent claude "$CLAUDE_PID" "${WORKSPACE}/claude-stdout.log"
+register_agent codex  "$CODEX_PID"  "${WORKSPACE}/codex-stdout.log"
+register_agent gemini "$GEMINI_PID" "${WORKSPACE}/gemini-stdout.log"
+
 log "Phase 1: Waiting for all 3 agents (PIDs: Claude=${CLAUDE_PID}, Codex=${CODEX_PID}, Gemini=${GEMINI_PID})"
+record_pids
 
-FAILURES=0
-
-wait $CLAUDE_PID || { log "Phase 1: Claude agent failed"; FAILURES=$((FAILURES + 1)); }
-wait $CODEX_PID || { log "Phase 1: Codex agent failed"; FAILURES=$((FAILURES + 1)); }
-wait $GEMINI_PID || { log "Phase 1: Gemini agent failed"; FAILURES=$((FAILURES + 1)); }
+wait_for_agents || {
+  # All agents crashed at startup
+  exit 1
+}
 
 # ── Report results ────────────────────────────────────────────────────────
 REPORTS_FOUND=0
@@ -189,7 +167,9 @@ done
 
 if [ "$REPORTS_FOUND" -eq 0 ]; then
   log "Phase 1: FATAL — no reports produced by any agent"
+  rm -f "${WORKSPACE}/agent-pids.txt"
   exit 1
 fi
 
+rm -f "${WORKSPACE}/agent-pids.txt"
 log "Phase 1: Complete (${REPORTS_FOUND}/3 reports produced, ${FAILURES} agent failures)"

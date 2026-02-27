@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 # Codex Subagent Wrapper — runs Codex in a bash loop since Codex lacks hooks
 #
-# Usage: codex-wrapper.sh <topic> <report_path> <max_iterations> <model> <reasoning_effort> <progress_log>
+# Usage: codex-wrapper.sh <initial_prompt> <report_path> <max_iterations> <model> <reasoning_effort> <progress_log> [<topic>]
+#
+# The initial prompt is the full instruction set for the first iteration,
+# built by the phase runner. The optional <topic> argument provides a short
+# description for continuation prompts. If omitted, defaults to "(research)".
 
 set -uo pipefail
 
-TOPIC="$1"
+INITIAL_PROMPT="$1"
 REPORT="$2"
 MAX_ITERS="${3:-10}"
 MODEL="${4:-gpt-5.3-codex}"
 REASONING="${5:-xhigh}"
 PROGRESS_LOG="${6:-/dev/null}"
+TOPIC="${7:-(research)}"
 
 log() {
   echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Codex: $*" >> "$PROGRESS_LOG"
@@ -18,26 +23,8 @@ log() {
 
 REPORT_ABS="$(cd "$(dirname "$REPORT")" && pwd)/$(basename "$REPORT")"
 
-# Build the initial research prompt
-read -r -d '' INITIAL_PROMPT << PROMPT_EOF || true
-You are a deep research agent. Conduct thorough, comprehensive research on the following topic:
-
-${TOPIC}
-
-## Instructions
-
-1. Use web search extensively to find current, authoritative information
-2. Write your findings as a well-structured markdown report to: ${REPORT_ABS}
-3. Include: Executive Summary, Key Findings (with citations), Methodology, Open Questions, Sources
-4. Go deep — surface-level summaries are not acceptable
-5. When your research is truly comprehensive, add this marker as the VERY LAST LINE:
-   <!-- RESEARCH_COMPLETE -->
-6. Do NOT add the marker prematurely — only when you have exhausted productive research avenues
-PROMPT_EOF
-
 # Build the continuation prompt
-read -r -d '' CONTINUE_PROMPT << PROMPT_EOF || true
-Continue your deep research on: ${TOPIC}
+CONTINUE_PROMPT="Continue your deep research on: ${TOPIC}
 
 Read your current report at ${REPORT_ABS}. Identify:
 - Gaps in coverage that need filling
@@ -46,10 +33,11 @@ Read your current report at ${REPORT_ABS}. Identify:
 - Areas where you were shallow and should go deeper
 
 Conduct additional web searches and update the report with substantial new content.
-When truly comprehensive, add <!-- RESEARCH_COMPLETE --> as the very last line.
-PROMPT_EOF
+When truly comprehensive, add <!-- RESEARCH_COMPLETE --> as the very last line."
 
 log "Starting research (model: ${MODEL}, reasoning: ${REASONING}, max_iters: ${MAX_ITERS})"
+
+LAST_ERROR=0
 
 # First iteration
 log "Iteration 1/${MAX_ITERS}"
@@ -59,7 +47,8 @@ codex exec \
   --full-auto \
   --skip-git-repo-check \
   "$INITIAL_PROMPT" 2>>"$PROGRESS_LOG" || {
-    log "ERROR: Codex iteration 1 failed (exit $?)"
+    LAST_ERROR=$?
+    log "ERROR: Codex iteration 1 failed (exit $LAST_ERROR)"
   }
 
 # Subsequent iterations
@@ -67,19 +56,26 @@ for i in $(seq 2 "$MAX_ITERS"); do
   # Check completion
   if [ -f "$REPORT" ] && grep -q "RESEARCH_COMPLETE" "$REPORT" 2>/dev/null; then
     log "Research complete after $((i-1)) iterations"
+    LAST_ERROR=0
     break
   fi
 
   log "Iteration ${i}/${MAX_ITERS}"
+  # NOTE: --last resumes the most recent Codex session. If the user runs
+  # Codex independently in another terminal during research, this could
+  # resume the wrong session. This is a Codex CLI limitation.
   codex exec resume --last \
     "$CONTINUE_PROMPT" 2>>"$PROGRESS_LOG" || {
-      log "ERROR: Codex iteration ${i} failed (exit $?)"
+      LAST_ERROR=$?
+      log "ERROR: Codex iteration ${i} failed (exit $LAST_ERROR)"
     }
 done
 
-# Final check
-if [ -f "$REPORT" ]; then
+# Final check — exit non-zero if no report was produced
+if [ -f "$REPORT" ] && [ -s "$REPORT" ]; then
   log "Report written to ${REPORT} ($(wc -l < "$REPORT") lines)"
+  exit 0
 else
-  log "WARNING: No report file produced at ${REPORT}"
+  log "ERROR: No report file produced at ${REPORT}"
+  exit 1
 fi
