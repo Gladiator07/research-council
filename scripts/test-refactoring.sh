@@ -227,19 +227,15 @@ assert_not_contains "refinement phase has no gemini-afteragent-hook.sh ref" "gem
 COMMON_LIB=$(cat "${SCRIPT_DIR}/lib/phase-common.sh")
 assert_contains "phase-common.sh references iteration-hook.sh" "iteration-hook.sh" "$COMMON_LIB"
 
-# Test 4b: RESEARCH_HOOK_FORMAT is set for Claude launches
-assert_contains "research sets HOOK_FORMAT=claude" "RESEARCH_HOOK_FORMAT=claude" "$RESEARCH_SCRIPT"
-assert_contains "refinement sets HOOK_FORMAT=claude" "RESEARCH_HOOK_FORMAT=claude" "$REFINEMENT_SCRIPT"
-
-# Test 4c: kill_tree is not defined in phase scripts (removed dead code)
+# Test 4b: kill_tree is not defined in phase scripts (removed dead code)
 assert_not_contains "research phase has no kill_tree" "kill_tree" "$RESEARCH_SCRIPT"
 assert_not_contains "refinement phase has no kill_tree" "kill_tree" "$REFINEMENT_SCRIPT"
 
-# Test 4d: Phase scripts source phase-common.sh
+# Test 4c: Phase scripts source phase-common.sh
 assert_contains "research phase sources phase-common.sh" "phase-common.sh" "$RESEARCH_SCRIPT"
 assert_contains "refinement phase sources phase-common.sh" "phase-common.sh" "$REFINEMENT_SCRIPT"
 
-# Test 4e: Orchestrator uses sedi helper, not raw sed -i
+# Test 4d: Orchestrator uses sedi helper, not raw sed -i
 ORCH_SCRIPT=$(cat "${PLUGIN_ROOT}/hooks/orchestrator-stop-hook.sh")
 # Exclude the sedi() function definition and comments, then check no raw 'sed -i' calls remain
 RAW_SED_I=$(echo "$ORCH_SCRIPT" | grep -v '^sedi()' | grep -v '^#' | grep -c 'sed -i' || true)
@@ -255,7 +251,7 @@ else
   echo "  FAIL: orchestrator has no sedi calls"
 fi
 
-# Test 4f: No gemini references in phase scripts
+# Test 4e: No gemini references in phase scripts
 assert_not_contains "research phase has no gemini references" "gemini" "$RESEARCH_SCRIPT"
 assert_not_contains "refinement phase has no gemini references" "gemini" "$REFINEMENT_SCRIPT"
 

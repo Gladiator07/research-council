@@ -18,7 +18,7 @@ Tests 5 groups:
 
 3. **sedi() helper** — Tests portable `sed -i` replacement, variable substitution, and preservation of other lines.
 
-4. **No stale references** — Ensures phase scripts reference `iteration-hook.sh` (not the old `claude-stop-hook.sh` or `gemini-afteragent-hook.sh`), set `RESEARCH_HOOK_FORMAT` for Claude, don't contain dead `kill_tree` code, and source `phase-common.sh`.
+4. **No stale references** — Ensures phase scripts reference `iteration-hook.sh` (not the old `claude-stop-hook.sh` or `gemini-afteragent-hook.sh`), don't contain dead `kill_tree` code, source `phase-common.sh`, and have no leftover gemini references.
 
 5. **Syntax checks** — Runs `bash -n` on all scripts to catch parse errors.
 

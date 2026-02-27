@@ -83,7 +83,6 @@ if [ -f "$CLAUDE_REPORT" ] && [ -s "$CLAUDE_REPORT" ]; then
     RESEARCH_STATE_PATH="$CLAUDE_STATE" \
     RESEARCH_MAX_ITERS="$MAX_ITERS" \
     RESEARCH_PROGRESS_LOG="$PROGRESS_LOG" \
-    RESEARCH_HOOK_FORMAT=claude \
     env -u CLAUDECODE claude -p \
       --model "$CLAUDE_MODEL" \
       $CLAUDE_EFFORT_FLAG \
