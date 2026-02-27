@@ -1,5 +1,5 @@
 {
-  "description": "Deep Research Council: orchestrates parallel research across Claude, Codex, and Gemini",
+  "description": "Deep Research Council: orchestrates parallel research across Claude and Codex",
   "hooks": {
     "Stop": [
       {

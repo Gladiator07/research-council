@@ -3,8 +3,8 @@
 #
 # Runs all 4 phases headlessly using cheap/fast models:
 #   1. Setup (smoke tests + workspace creation)
-#   2. Research (3 parallel agents)
-#   3. Refinement (3 parallel agents cross-pollinate)
+#   2. Research (2 parallel agents)
+#   3. Refinement (2 parallel agents cross-pollinate)
 #   4. Synthesis (single Claude agent writes final report)
 #
 # Usage:
@@ -52,7 +52,6 @@ RESEARCH_ID=$(parse_field "research_id")
 CLAUDE_MODEL=$(parse_field "claude_model")
 CODEX_MODEL=$(parse_field "codex_model")
 CODEX_REASONING=$(parse_field "codex_reasoning")
-GEMINI_MODEL=$(parse_field "gemini_model")
 MAX_ITERS=$(parse_field "max_iterations")
 
 WORKSPACE="research/${RESEARCH_ID}"
@@ -75,7 +74,7 @@ echo ""
 echo "=== Phase 1: Research ==="
 bash "${SCRIPT_DIR}/run-research-phase.sh" \
   "$RESEARCH_ID" "$TOPIC" "$MAX_ITERS" \
-  "$CLAUDE_MODEL" "$CODEX_MODEL" "$CODEX_REASONING" "$GEMINI_MODEL"
+  "$CLAUDE_MODEL" "$CODEX_MODEL" "$CODEX_REASONING"
 RESEARCH_EXIT=$?
 
 if [ "$RESEARCH_EXIT" -ne 0 ]; then
@@ -85,21 +84,21 @@ fi
 
 # Verify at least 1 report exists
 REPORTS=0
-for f in "${WORKSPACE}/claude-report.md" "${WORKSPACE}/codex-report.md" "${WORKSPACE}/gemini-report.md"; do
+for f in "${WORKSPACE}/claude-report.md" "${WORKSPACE}/codex-report.md"; do
   [ -f "$f" ] && [ -s "$f" ] && REPORTS=$((REPORTS + 1))
 done
 if [ "$REPORTS" -eq 0 ]; then
   log "FATAL: No reports produced"
   exit 1
 fi
-log "Research complete: ${REPORTS}/3 reports"
+log "Research complete: ${REPORTS}/2 reports"
 
 # ── Phase 2: Refinement ─────────────────────────────────────────────────
 echo ""
 echo "=== Phase 2: Refinement ==="
 bash "${SCRIPT_DIR}/run-refinement-phase.sh" \
   "$RESEARCH_ID" "$TOPIC" "$MAX_ITERS" \
-  "$CLAUDE_MODEL" "$CODEX_MODEL" "$CODEX_REASONING" "$GEMINI_MODEL"
+  "$CLAUDE_MODEL" "$CODEX_MODEL" "$CODEX_REASONING"
 REFINEMENT_EXIT=$?
 
 if [ "$REFINEMENT_EXIT" -ne 0 ]; then
@@ -109,7 +108,7 @@ fi
 # Collect available refined reports (fall back to originals if needed)
 REPORT_LIST=""
 AVAILABLE=0
-for agent in claude codex gemini; do
+for agent in claude codex; do
   REFINED="${WORKSPACE}/${agent}-refined.md"
   ORIGINAL="${WORKSPACE}/${agent}-report.md"
   if [ -f "$REFINED" ] && [ -s "$REFINED" ]; then
@@ -127,7 +126,7 @@ if [ "$AVAILABLE" -eq 0 ]; then
   log "FATAL: No reports available for synthesis"
   exit 1
 fi
-log "Refinement complete: ${AVAILABLE}/3 refined reports"
+log "Refinement complete: ${AVAILABLE}/2 refined reports"
 
 # ── Phase 3: Synthesis ───────────────────────────────────────────────────
 echo ""

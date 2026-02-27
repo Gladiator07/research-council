@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Unit tests for the DRY refactoring changes:
-#   1. iteration-hook.sh (unified claude/gemini hook)
+# Unit tests for the refactoring changes:
+#   1. iteration-hook.sh (Claude stop hook)
 #   2. lib/phase-common.sh (shared wait infrastructure)
 #   3. sedi() helper in orchestrator-stop-hook.sh
 #   4. No stale references to old hook scripts
@@ -60,12 +60,11 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 # Helper: run iteration hook with env vars properly exported
 run_hook() {
-  local format="$1" report="$2" state="$3" max_iters="$4"
+  local report="$1" state="$2" max_iters="$3"
   (
     export RESEARCH_REPORT_PATH="$report"
     export RESEARCH_STATE_PATH="$state"
     export RESEARCH_MAX_ITERS="$max_iters"
-    export RESEARCH_HOOK_FORMAT="$format"
     export RESEARCH_PROGRESS_LOG="/dev/null"
     echo '{}' | bash "${SCRIPT_DIR}/iteration-hook.sh"
   )
@@ -77,54 +76,40 @@ echo "=== Test Group 1: iteration-hook.sh ==="
 # Test 1a: Claude format — blocks with "block" decision
 echo "1" > "${TMPDIR}/state.txt"
 touch "${TMPDIR}/report.md"
-OUTPUT=$(run_hook claude "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
+OUTPUT=$(run_hook "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
 assert_contains "claude format uses block decision" '"decision": "block"' "$OUTPUT"
 assert_contains "claude format has reason" '"reason":' "$OUTPUT"
 assert_eq "claude format increments state" "2" "$(cat "${TMPDIR}/state.txt")"
 
-# Test 1b: Gemini format — blocks with "deny" decision
-echo "1" > "${TMPDIR}/state.txt"
-touch "${TMPDIR}/report.md"
-OUTPUT=$(run_hook gemini "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
-assert_contains "gemini format uses deny decision" '"decision": "deny"' "$OUTPUT"
-
-# Test 1c: Completion marker stops the loop (claude)
+# Test 1b: Completion marker stops the loop
 echo "2" > "${TMPDIR}/state.txt"
 echo "Some report content" > "${TMPDIR}/report.md"
 echo "<!-- RESEARCH_COMPLETE -->" >> "${TMPDIR}/report.md"
-OUTPUT=$(run_hook claude "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 10)
+OUTPUT=$(run_hook "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 10)
 # Claude format: allow = empty output + exit 0
 assert_eq "claude allows exit on RESEARCH_COMPLETE" "" "$OUTPUT"
 
-# Test 1d: Completion marker stops the loop (gemini)
-echo "2" > "${TMPDIR}/state.txt"
-OUTPUT=$(run_hook gemini "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 10)
-assert_contains "gemini allows exit on RESEARCH_COMPLETE" '"decision": "allow"' "$OUTPUT"
-
-# Test 1e: Max iterations reached
+# Test 1c: Max iterations reached
 echo "5" > "${TMPDIR}/state.txt"
 echo "no marker here" > "${TMPDIR}/report.md"
-OUTPUT=$(run_hook gemini "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
-assert_contains "gemini allows exit at max iters" '"decision": "allow"' "$OUTPUT"
+OUTPUT=$(run_hook "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
+assert_eq "claude allows exit at max iters" "" "$OUTPUT"
 
-# Test 1f: Missing env vars → allow exit
-OUTPUT=$(run_hook claude "" "" 5)
+# Test 1d: Missing env vars → allow exit
+OUTPUT=$(run_hook "" "" 5)
 assert_eq "claude allows exit when env vars missing" "" "$OUTPUT"
 
-OUTPUT=$(run_hook gemini "" "" 5)
-assert_contains "gemini allows exit when env vars missing" '"decision": "allow"' "$OUTPUT"
-
-# Test 1g: Non-numeric state resets to 1
+# Test 1e: Non-numeric state resets to 1
 echo "garbage" > "${TMPDIR}/state.txt"
 echo "no marker" > "${TMPDIR}/report.md"
-OUTPUT=$(run_hook claude "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
+OUTPUT=$(run_hook "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
 assert_contains "non-numeric state resets and blocks" '"decision": "block"' "$OUTPUT"
 assert_eq "state reset to 2 (1+1)" "2" "$(cat "${TMPDIR}/state.txt")"
 
-# Test 1h: Iteration counter increments correctly
+# Test 1f: Iteration counter increments correctly
 echo "3" > "${TMPDIR}/state.txt"
 echo "no marker" > "${TMPDIR}/report.md"
-OUTPUT=$(run_hook claude "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
+OUTPUT=$(run_hook "${TMPDIR}/report.md" "${TMPDIR}/state.txt" 5)
 assert_eq "state incremented from 3 to 4" "4" "$(cat "${TMPDIR}/state.txt")"
 assert_contains "systemMessage shows iteration 4/5" "4/5" "$OUTPUT"
 
@@ -238,15 +223,13 @@ REFINEMENT_SCRIPT=$(cat "${SCRIPT_DIR}/run-refinement-phase.sh")
 assert_not_contains "refinement phase has no claude-stop-hook.sh ref" "claude-stop-hook.sh" "$REFINEMENT_SCRIPT"
 assert_not_contains "refinement phase has no gemini-afteragent-hook.sh ref" "gemini-afteragent-hook.sh" "$REFINEMENT_SCRIPT"
 
-# iteration-hook.sh reference now lives in phase-common.sh (via write_claude_settings/write_gemini_settings)
+# iteration-hook.sh reference now lives in phase-common.sh (via write_claude_settings)
 COMMON_LIB=$(cat "${SCRIPT_DIR}/lib/phase-common.sh")
 assert_contains "phase-common.sh references iteration-hook.sh" "iteration-hook.sh" "$COMMON_LIB"
 
-# Test 4b: RESEARCH_HOOK_FORMAT is set for both claude and gemini launches
+# Test 4b: RESEARCH_HOOK_FORMAT is set for Claude launches
 assert_contains "research sets HOOK_FORMAT=claude" "RESEARCH_HOOK_FORMAT=claude" "$RESEARCH_SCRIPT"
-assert_contains "research sets HOOK_FORMAT=gemini" "RESEARCH_HOOK_FORMAT=gemini" "$RESEARCH_SCRIPT"
 assert_contains "refinement sets HOOK_FORMAT=claude" "RESEARCH_HOOK_FORMAT=claude" "$REFINEMENT_SCRIPT"
-assert_contains "refinement sets HOOK_FORMAT=gemini" "RESEARCH_HOOK_FORMAT=gemini" "$REFINEMENT_SCRIPT"
 
 # Test 4c: kill_tree is not defined in phase scripts (removed dead code)
 assert_not_contains "research phase has no kill_tree" "kill_tree" "$RESEARCH_SCRIPT"
@@ -271,6 +254,10 @@ else
   FAIL=$((FAIL + 1))
   echo "  FAIL: orchestrator has no sedi calls"
 fi
+
+# Test 4f: No gemini references in phase scripts
+assert_not_contains "research phase has no gemini references" "gemini" "$RESEARCH_SCRIPT"
+assert_not_contains "refinement phase has no gemini references" "gemini" "$REFINEMENT_SCRIPT"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
