@@ -4,6 +4,8 @@ reviews/
 
 # Local runtime/state (contains prompts, logs, and machine-local settings)
 .claude/
+!.claude-plugin/
+!.claude-plugin/**
 
 # Local scratch and planning artifacts
 plan.md
