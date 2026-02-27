@@ -18,9 +18,8 @@ log() {
 
 REPORT_ABS="$(cd "$(dirname "$REPORT")" && pwd)/$(basename "$REPORT")"
 
-# Build the initial research prompt
-read -r -d '' INITIAL_PROMPT << PROMPT_EOF || true
-You are a deep research agent. Conduct thorough, comprehensive research on the following topic:
+# Build the initial research prompt (simple assignment — no heredoc expansion)
+INITIAL_PROMPT="You are a deep research agent. Conduct thorough, comprehensive research on the following topic:
 
 ${TOPIC}
 
@@ -32,12 +31,10 @@ ${TOPIC}
 4. Go deep — surface-level summaries are not acceptable
 5. When your research is truly comprehensive, add this marker as the VERY LAST LINE:
    <!-- RESEARCH_COMPLETE -->
-6. Do NOT add the marker prematurely — only when you have exhausted productive research avenues
-PROMPT_EOF
+6. Do NOT add the marker prematurely — only when you have exhausted productive research avenues"
 
 # Build the continuation prompt
-read -r -d '' CONTINUE_PROMPT << PROMPT_EOF || true
-Continue your deep research on: ${TOPIC}
+CONTINUE_PROMPT="Continue your deep research on: ${TOPIC}
 
 Read your current report at ${REPORT_ABS}. Identify:
 - Gaps in coverage that need filling
@@ -46,10 +43,11 @@ Read your current report at ${REPORT_ABS}. Identify:
 - Areas where you were shallow and should go deeper
 
 Conduct additional web searches and update the report with substantial new content.
-When truly comprehensive, add <!-- RESEARCH_COMPLETE --> as the very last line.
-PROMPT_EOF
+When truly comprehensive, add <!-- RESEARCH_COMPLETE --> as the very last line."
 
 log "Starting research (model: ${MODEL}, reasoning: ${REASONING}, max_iters: ${MAX_ITERS})"
+
+LAST_ERROR=0
 
 # First iteration
 log "Iteration 1/${MAX_ITERS}"
@@ -59,7 +57,8 @@ codex exec \
   --full-auto \
   --skip-git-repo-check \
   "$INITIAL_PROMPT" 2>>"$PROGRESS_LOG" || {
-    log "ERROR: Codex iteration 1 failed (exit $?)"
+    LAST_ERROR=$?
+    log "ERROR: Codex iteration 1 failed (exit $LAST_ERROR)"
   }
 
 # Subsequent iterations
@@ -67,19 +66,23 @@ for i in $(seq 2 "$MAX_ITERS"); do
   # Check completion
   if [ -f "$REPORT" ] && grep -q "RESEARCH_COMPLETE" "$REPORT" 2>/dev/null; then
     log "Research complete after $((i-1)) iterations"
+    LAST_ERROR=0
     break
   fi
 
   log "Iteration ${i}/${MAX_ITERS}"
   codex exec resume --last \
     "$CONTINUE_PROMPT" 2>>"$PROGRESS_LOG" || {
-      log "ERROR: Codex iteration ${i} failed (exit $?)"
+      LAST_ERROR=$?
+      log "ERROR: Codex iteration ${i} failed (exit $LAST_ERROR)"
     }
 done
 
-# Final check
-if [ -f "$REPORT" ]; then
+# Final check — exit non-zero if no report was produced
+if [ -f "$REPORT" ] && [ -s "$REPORT" ]; then
   log "Report written to ${REPORT} ($(wc -l < "$REPORT") lines)"
+  exit 0
 else
-  log "WARNING: No report file produced at ${REPORT}"
+  log "ERROR: No report file produced at ${REPORT}"
+  exit 1
 fi

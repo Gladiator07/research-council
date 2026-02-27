@@ -15,13 +15,20 @@ log() {
   echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] orchestrator: $*" >> "$LOG_FILE"
 }
 
+# Portable sed -i (macOS vs GNU)
+sedi() { if [[ "$OSTYPE" == "darwin"* ]]; then sed -i '' "$@"; else sed -i "$@"; fi; }
+
+# Escape a string for safe use in sed replacement patterns
+sed_escape() { printf '%s\n' "$1" | sed 's/[&/\]/\\&/g'; }
+
 # On any error, allow exit
-trap 'log "ERROR: hook exited via ERR trap (line $LINENO)"; printf "{\"decision\":\"approve\"}\n"; exit 0' ERR
+trap 'log "ERROR: hook exited via ERR trap (line $LINENO)"; rm -f ".claude/deep-research.lock"; printf "{\"decision\":\"approve\"}\n"; exit 0' ERR
 
 # Consume stdin
 HOOK_INPUT=$(cat)
 
 STATE_FILE=".claude/deep-research.local.md"
+LOCK_FILE=".claude/deep-research.lock"
 
 # No active session → allow exit
 if [ ! -f "$STATE_FILE" ]; then
@@ -56,6 +63,76 @@ if ! echo "$RESEARCH_ID" | grep -qE '^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$'; then
   exit 0
 fi
 
+# ── Lock helpers (defined early — used by session-ID check and phase execution) ──
+# Lock file stores "PID:EPOCH" to defend against PID-reuse false positives.
+# A lock older than 2 hours is treated as stale regardless of PID liveness.
+LOCK_MAX_AGE=7200  # 2 hours in seconds
+
+is_lock_alive() {
+  [ -f "$LOCK_FILE" ] || return 1
+  local lock_content pid lock_epoch now age
+  lock_content=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+  pid="${lock_content%%:*}"
+  lock_epoch="${lock_content#*:}"
+  [ -z "$pid" ] && return 1
+  # If lock has no epoch (legacy format), treat as stale
+  [ "$lock_epoch" = "$pid" ] && return 1
+  # Validate numeric format to avoid arithmetic errors on malformed content
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$lock_epoch" =~ ^[0-9]+$ ]] || return 1
+  # Check age — stale locks are dead regardless of PID
+  now=$(date +%s)
+  age=$(( now - lock_epoch ))
+  if [ "$age" -gt "$LOCK_MAX_AGE" ]; then
+    log "WARN: lock is ${age}s old (max ${LOCK_MAX_AGE}s), treating as stale despite PID=$pid"
+    return 1
+  fi
+  # PID must still be alive
+  kill -0 "$pid" 2>/dev/null || return 1
+  return 0
+}
+
+# ── Session ID check: skip if different session ──────────────────────────
+CURRENT_SESSION=$(echo "$HOOK_INPUT" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+RECORDED_SESSION=$(parse_field "session_id")
+
+# First run: stamp the session ID into the state file
+if [ -z "$RECORDED_SESSION" ] && [ -n "$CURRENT_SESSION" ]; then
+  sedi "s/^session_id:$/session_id: $(sed_escape "$CURRENT_SESSION")/" "$STATE_FILE"
+  RECORDED_SESSION="$CURRENT_SESSION"
+  log "Stamped session_id: ${CURRENT_SESSION}"
+fi
+
+# Different session — check if we can adopt the orphaned research
+if [ -n "$RECORDED_SESSION" ] && [ -n "$CURRENT_SESSION" ] && [ "$CURRENT_SESSION" != "$RECORDED_SESSION" ]; then
+  # If a lock is held by a live, recent process, another session is actively running phases
+  if is_lock_alive; then
+    log "Skipping: different session and lock is active (current=$CURRENT_SESSION, recorded=$RECORDED_SESSION)"
+    exit 0
+  fi
+  # No active lock — adopt the research into this session
+  log "Adopting orphaned research into new session (old=$RECORDED_SESSION, new=$CURRENT_SESSION)"
+  sedi "s/^session_id: .*$/session_id: $(sed_escape "$CURRENT_SESSION")/" "$STATE_FILE"
+  RECORDED_SESSION="$CURRENT_SESSION"
+fi
+
+# ── Staleness check: auto-clean after 5 hours ────────────────────────────
+STARTED_AT=$(parse_field "started_at")
+if [ -n "$STARTED_AT" ]; then
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    STARTED_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$STARTED_AT" +%s 2>/dev/null || echo 0)
+  else
+    STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || echo 0)
+  fi
+  NOW_EPOCH=$(date +%s)
+  AGE=$(( NOW_EPOCH - STARTED_EPOCH ))
+  if [ "$AGE" -gt 18000 ]; then  # 5 hours = 18000 seconds
+    log "WARN: stale state file (${AGE}s old, started_at=$STARTED_AT), cleaning up"
+    rm -f "$STATE_FILE"
+    exit 0
+  fi
+fi
+
 # Extract topic (everything after closing --- in the markdown)
 TOPIC=$(awk '/^---$/{i++; next} i>=2' "$STATE_FILE" | sed '/^$/d')
 
@@ -69,13 +146,29 @@ WORKSPACE="research/${RESEARCH_ID}"
 SCRIPT_DIR="$(cd "$(dirname "$0")/../scripts" && pwd)"
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Safety: prevent re-entrant loops
-STOP_HOOK_ACTIVE=$(echo "$HOOK_INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null || echo "false")
-if [ "$STOP_HOOK_ACTIVE" = "true" ] && [ "$PHASE" = "research" ]; then
-  log "WARN: stop_hook_active=true during research phase, possible loop — aborting"
-  rm -f "$STATE_FILE"
-  exit 0
-fi
+# ── Lock acquire/release (is_lock_alive defined above) ────────────────
+acquire_lock() {
+  if [ -f "$LOCK_FILE" ]; then
+    if is_lock_alive; then
+      local lock_content
+      lock_content=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+      log "SKIP: another hook is running phases (lock=$lock_content)"
+      jq -n '{decision:"block", reason:"Research agents are still running. Please wait."}'
+      exit 0
+    else
+      log "WARN: removing stale lock"
+      rm -f "$LOCK_FILE"
+    fi
+  fi
+  echo "$$:$(date +%s)" > "$LOCK_FILE"
+}
+
+release_lock() {
+  rm -f "$LOCK_FILE"
+}
+
+# Export test mode for child scripts
+export RESEARCH_TEST_MODE="${TEST_MODE:-false}"
 
 # ── Phase: research ──────────────────────────────────────────────────────
 run_research() {
@@ -89,7 +182,6 @@ run_research() {
     "$CODEX_MODEL" \
     "$CODEX_REASONING" \
     "$GEMINI_MODEL"
-
   RESULT=$?
   log "Phase 1 finished (exit $RESULT)"
 
@@ -102,6 +194,7 @@ run_research() {
   if [ "$REPORTS_FOUND" -eq 0 ]; then
     log "FATAL: No reports produced in Phase 1"
     rm -f "$STATE_FILE"
+    rm -f "$LOCK_FILE"
     REASON="ERROR: No research reports were produced by any agent. Check ${WORKSPACE}/progress.log and the agent stdout logs for errors. Common issues:
 - CLI authentication not set up (run 'codex login', 'gemini' to auth)
 - API keys not configured
@@ -113,11 +206,7 @@ Review the logs and try again with /deep-research"
   fi
 
   # Update state to refinement
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' 's/^phase: research$/phase: refinement/' "$STATE_FILE"
-  else
-    sed -i 's/^phase: research$/phase: refinement/' "$STATE_FILE"
-  fi
+  sedi 's/^phase: research$/phase: refinement/' "$STATE_FILE"
 }
 
 # ── Phase: refinement ────────────────────────────────────────────────────
@@ -132,15 +221,8 @@ run_refinement() {
     "$CODEX_MODEL" \
     "$CODEX_REASONING" \
     "$GEMINI_MODEL"
-
-  log "Phase 2 finished (exit $?)"
-
-  # Update state to synthesis
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' 's/^phase: refinement$/phase: synthesis/' "$STATE_FILE"
-  else
-    sed -i 's/^phase: refinement$/phase: synthesis/' "$STATE_FILE"
-  fi
+  REFINE_RESULT=$?
+  log "Phase 2 finished (exit $REFINE_RESULT)"
 
   # Build list of available refined reports and track which agents succeeded
   REPORT_LIST=""
@@ -157,10 +239,26 @@ run_refinement() {
 - ${f} (${name})"
       AVAILABLE_COUNT=$((AVAILABLE_COUNT + 1))
     else
+      name_lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
       MISSING_LIST="${MISSING_LIST}
-- ${name}: no report produced (check ${WORKSPACE}/${name,,}-stdout.log for errors)"
+- ${name}: no report produced (check ${WORKSPACE}/${name_lower}-stdout.log for errors)"
     fi
   done
+
+  # Don't advance to synthesis if no refined reports exist
+  if [ "$AVAILABLE_COUNT" -eq 0 ]; then
+    log "FATAL: No refined reports produced in Phase 2"
+    rm -f "$STATE_FILE"
+    release_lock
+    REASON="ERROR: Refinement phase failed — no refined reports were produced by any agent. Check ${WORKSPACE}/progress.log and agent stdout logs for errors.
+
+Review the logs and try again with /deep-research"
+    jq -n --arg r "$REASON" '{decision:"block", reason:$r}'
+    return
+  fi
+
+  # Update state to synthesis
+  sedi 's/^phase: refinement$/phase: synthesis/' "$STATE_FILE"
 
   COVERAGE_NOTE=""
   if [ -n "$MISSING_LIST" ]; then
@@ -210,17 +308,24 @@ check_synthesis() {
 }
 
 # ── State machine ────────────────────────────────────────────────────────
+# Disable global ERR trap during phase execution — errors are handled explicitly
+trap - ERR
+
 case "$PHASE" in
   research)
+    acquire_lock
     run_research
     # Fall through to refinement if research succeeded
     if [ "$(parse_field "phase")" = "refinement" ]; then
       run_refinement
     fi
+    release_lock
     ;;
 
   refinement)
+    acquire_lock
     run_refinement
+    release_lock
     ;;
 
   synthesis)

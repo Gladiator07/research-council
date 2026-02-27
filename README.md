@@ -175,7 +175,7 @@ research/20260222-143000-a1b2c3/
 
 | Agent | Model | Reasoning |
 |-------|-------|-----------|
-| Claude | `claude-haiku-4-5-20251001` | default |
+| Claude | `claude-haiku-4-5-20251001` | effort: low |
 | Codex | `gpt-5.1-codex-mini` | reasoning_effort: low |
 | Gemini | `gemini-2.5-flash-lite` | default |
 
@@ -208,8 +208,14 @@ Check the agent stdout logs in `research/<id>/`:
 
 Common causes: authentication failures, model not available on your subscription tier, network issues.
 
+### An agent failed (e.g., Gemini 503)
+Individual agent failures are tolerated — the failed agent is skipped and the remaining agents continue. The final synthesis will note reduced coverage. Check the agent's stdout log for details.
+
 ### Research seems stuck
 Monitor `research/<id>/progress.log`. If an agent is stuck, you can cancel with `/cancel-research` and try again. The orchestrator has a 2-hour timeout as a safety net.
+
+### Stop hook interfering with other sessions
+The plugin's Stop hook tracks which Claude Code session started the research. While that session is actively running phases (lock held), other sessions will skip the hook silently. If the original session is no longer running phases (e.g., it was closed), a new session will adopt the orphaned research and continue where it left off. State files older than 5 hours are automatically cleaned up.
 
 ### "A research session is already active"
 Run `/cancel-research` first, or check if a previous session is still running.
