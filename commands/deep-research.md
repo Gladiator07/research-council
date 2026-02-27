@@ -15,7 +15,7 @@ allowed-tools:
 First, run the setup script to validate prerequisites and create the research workspace:
 
 ```bash
-set -o noglob; bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-research.sh" $ARGUMENTS; set +o noglob
+set -o noglob; bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-research.sh" $ARGUMENTS; _rc=$?; set +o noglob; (exit $_rc)
 ```
 
 If setup fails, help the user fix the issue (install missing CLIs, set API keys, etc.) and DO NOT proceed further.
