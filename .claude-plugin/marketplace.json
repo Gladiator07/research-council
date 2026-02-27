@@ -1,7 +1,7 @@
 {
   "name": "research-council",
   "metadata": {
-    "description": "Deep research across Claude, Codex, and Gemini in parallel with cross-pollination refinement"
+    "description": "Deep research across Claude and Codex in parallel with cross-pollination refinement"
   },
   "owner": {
     "name": "Hamel Husain"
@@ -10,7 +10,7 @@
     {
       "name": "research-council",
       "source": "./",
-      "description": "Deep research across Claude, Codex, and Gemini in parallel with cross-pollination refinement"
+      "description": "Deep research across Claude and Codex in parallel with cross-pollination refinement"
     }
   ]
 }

@@ -18,11 +18,11 @@ while [[ $# -gt 0 ]]; do
       cat << 'HELP'
 Usage: /deep-research [--test] <research topic>
 
-Launches deep research across Claude, Codex, and Gemini in parallel.
+Launches deep research across Claude and Codex in parallel.
 
 Phases:
-  1. Three agents independently research the topic (with iterative loops)
-  2. Each agent reads all 3 reports and refines with new avenues
+  1. Two agents independently research the topic (with iterative loops)
+  2. Each agent reads both reports and refines with new avenues
   3. Main Claude synthesizes everything into a final report
 
 Options:
@@ -31,7 +31,6 @@ Options:
 Prerequisites:
   - claude CLI (Claude Code)
   - codex CLI (OpenAI Codex)
-  - gemini CLI (Google Gemini)
   - jq (JSON processor)
 
 Example:
@@ -73,9 +72,6 @@ fi
 if ! command -v codex &>/dev/null; then
   MISSING+=("codex (OpenAI Codex CLI — npm install -g @openai/codex)")
 fi
-if ! command -v gemini &>/dev/null; then
-  MISSING+=("gemini (Google Gemini CLI — npm install -g @google/gemini-cli)")
-fi
 if ! command -v jq &>/dev/null; then
   MISSING+=("jq (JSON processor — brew install jq)")
 fi
@@ -97,14 +93,6 @@ WARNINGS=()
 # Check Codex auth
 if ! codex --version &>/dev/null 2>&1; then
   WARNINGS+=("codex may not be authenticated — run 'codex login' if research fails")
-fi
-
-# Check Gemini auth
-if [ -z "${GEMINI_API_KEY:-}" ] && [ -z "${GOOGLE_API_KEY:-}" ]; then
-  # Check if OAuth is configured
-  if [ ! -f "${HOME}/.gemini/oauth_creds.json" ] && [ ! -f "${HOME}/.config/gemini/oauth_creds.json" ]; then
-    WARNINGS+=("gemini may not be authenticated — run 'gemini' once to set up auth, or set GEMINI_API_KEY")
-  fi
 fi
 
 if [ ${#WARNINGS[@]} -gt 0 ]; then
@@ -167,24 +155,14 @@ smoke_codex() {
   echo $((SECONDS - start)) > "$SMOKE_DIR/codex.time"
 }
 
-smoke_gemini() {
-  local start=$SECONDS
-  "$TIMEOUT_CMD" 60 gemini -p \
-    "Reply with OK" \
-    --model gemini-2.5-flash-lite > "$SMOKE_DIR/gemini.out" 2>&1
-  echo $? > "$SMOKE_DIR/gemini.exit"
-  echo $((SECONDS - start)) > "$SMOKE_DIR/gemini.time"
-}
-
-# Run all 3 in parallel
+# Run both in parallel
 smoke_claude &
 smoke_codex &
-smoke_gemini &
 wait
 
 SMOKE_FAILURES=()
 
-for agent in claude codex gemini; do
+for agent in claude codex; do
   EXIT_CODE=$(cat "$SMOKE_DIR/${agent}.exit" 2>/dev/null || echo 1)
   ELAPSED=$(cat "$SMOKE_DIR/${agent}.time" 2>/dev/null || echo "?")
 
@@ -215,10 +193,6 @@ if [ ${#SMOKE_FAILURES[@]} -gt 0 ]; then
         echo "  codex:  Verify your OpenAI API key and account quota."
         echo "          Run: codex exec --model gpt-5.1-codex-mini --full-auto --skip-git-repo-check 'Reply with OK'"
         ;;
-      gemini)
-        echo "  gemini: Verify your Gemini API key (GEMINI_API_KEY or GOOGLE_API_KEY) or OAuth setup."
-        echo "          Run: gemini -p 'Reply with OK' --model gemini-2.5-flash-lite"
-        ;;
     esac
   done
   echo ""
@@ -243,14 +217,12 @@ if [ "$TEST_MODE" = true ]; then
   CLAUDE_MODEL="claude-haiku-4-5-20251001"
   CODEX_MODEL="gpt-5.1-codex-mini"
   CODEX_REASONING="low"
-  GEMINI_MODEL="gemini-2.5-flash-lite"
   MODE_LABEL="TEST MODE (cheap models, 2 iterations)"
 else
   MAX_ITERS=10
   CLAUDE_MODEL="claude-opus-4-6"
   CODEX_MODEL="gpt-5.3-codex"
   CODEX_REASONING="xhigh"
-  GEMINI_MODEL="gemini-2.5-pro"
   MODE_LABEL="PRODUCTION (maximum reasoning depth)"
 fi
 
@@ -272,7 +244,6 @@ max_iterations: ${MAX_ITERS}
 claude_model: ${CLAUDE_MODEL}
 codex_model: ${CODEX_MODEL}
 codex_reasoning: ${CODEX_REASONING}
-gemini_model: ${GEMINI_MODEL}
 started_at: ${STATE_TIMESTAMP}
 ---
 STATE_EOF
@@ -292,7 +263,6 @@ echo ""
 echo "  Agents:"
 echo "    Claude  →  ${CLAUDE_MODEL}"
 echo "    Codex   →  ${CODEX_MODEL} (reasoning: ${CODEX_REASONING})"
-echo "    Gemini  →  ${GEMINI_MODEL}"
 echo ""
 echo "  Max iterations per agent: ${MAX_ITERS}"
 echo "  Workspace: ${WORKSPACE}/"

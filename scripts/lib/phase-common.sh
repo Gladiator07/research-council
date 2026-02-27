@@ -13,7 +13,6 @@
 #   register_agent()         — register an agent name, PID, and log path
 #   record_pids()            — write agent-pids.txt for cancel support
 #   write_claude_settings()  — write Claude Stop hook settings JSON
-#   write_gemini_settings()  — write Gemini AfterAgent hook settings JSON
 #   wait_for_agents()        — poll-based wait with log monitoring for fatal errors
 #                              Sets: FAILURES (count of failed agents)
 
@@ -56,29 +55,6 @@ write_claude_settings() {
         "type": "command",
         "command": "${2}/scripts/iteration-hook.sh",
         "timeout": 120
-      }]
-    }]
-  }
-}
-EOF
-}
-
-# Write Gemini settings JSON with AfterAgent hook pointing to iteration-hook.sh.
-# Usage: write_gemini_settings <output_dir> <plugin_root> [hook_name]
-write_gemini_settings() {
-  local settings_dir="$1" plugin_root="$2" hook_name="${3:-research-loop}"
-  mkdir -p "${settings_dir}/.gemini"
-  cat > "${settings_dir}/.gemini/settings.json" << EOF
-{
-  "hooksConfig": {"enabled": true},
-  "hooks": {
-    "AfterAgent": [{
-      "matcher": "*",
-      "hooks": [{
-        "name": "${hook_name}",
-        "type": "command",
-        "command": "${plugin_root}/scripts/iteration-hook.sh",
-        "timeout": 30000
       }]
     }]
   }

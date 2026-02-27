@@ -1,6 +1,8 @@
 # Research Council
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that orchestrates deep research across **three coding agents** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex) (OpenAI), and [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google) — running in parallel with cross-pollination refinement and final synthesis.
+A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that orchestrates deep research across **two coding agents** — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) (OpenAI) — running in parallel with cross-pollination refinement and final synthesis.
+
+> **Note:** Gemini CLI was previously included as a third agent but was removed due to persistent flakiness — frequent quota errors, sandbox limitations requiring workarounds, and an internal retry loop that hangs indefinitely on rate limits. The two-agent setup (Claude + Codex) is more reliable and still produces high-quality cross-pollinated research.
 
 ## How it Works
 
@@ -16,11 +18,11 @@ Each agent uses the **most powerful model** from its provider with **thinking/re
 
 The plugin runs a 3-phase pipeline:
 
-1. **Independent Research** — All three agents research the topic simultaneously, each iterating with web searches until they're satisfied with depth and coverage
-2. **Cross-Pollination Refinement** — Each agent reads all three reports and refines its own, using the others as springboards for *new* investigation (not copying). Agents are prompted to be skeptical — they independently verify peer claims via web search rather than accepting them at face value
+1. **Independent Research** — Both agents research the topic simultaneously, each iterating with web searches until they're satisfied with depth and coverage
+2. **Cross-Pollination Refinement** — Each agent reads both reports and refines its own, using the other as a springboard for *new* investigation (not copying). Agents are prompted to be skeptical — they independently verify peer claims via web search rather than accepting them at face value
 3. **Synthesis** — Claude reads all refined reports and produces a single final report organized by theme
 
-The key step is **cross-pollination**. Different AI providers have different training data, search behaviors, and analytical tendencies. When Agent A reads Agent B's report it provides an opportunity to discover angles it missed, contradictions to resolve, and gaps none of the research indpendently covered. This produces research that's substantially deeper than any single agent could achieve alone, or than simply merging three independent reports.
+The key step is **cross-pollination**. Different AI providers have different training data, search behaviors, and analytical tendencies. When Agent A reads Agent B's report it provides an opportunity to discover angles it missed, contradictions to resolve, and gaps neither agent independently covered. This produces research that's substantially deeper than any single agent could achieve alone, or than simply merging two independent reports.
 
 ```mermaid
 flowchart TD
@@ -30,29 +32,25 @@ flowchart TD
         direction LR
         C1["Claude researches topic"]
         C2["Codex researches topic"]
-        C3["Gemini researches topic"]
     end
 
-    B --> C1 & C2 & C3
+    B --> C1 & C2
     C1 --> R1["claude-report.md"]
     C2 --> R2["codex-report.md"]
-    C3 --> R3["gemini-report.md"]
 
-    R1 & R2 & R3 --> D["Phase 2: Cross-Pollination"]
+    R1 & R2 --> D["Phase 2: Cross-Pollination"]
 
     subgraph Phase2["Phase 2 — Cross-Pollination Refinement"]
         direction LR
-        D1["Claude reads all 3, refines"]
-        D2["Codex reads all 3, refines"]
-        D3["Gemini reads all 3, refines"]
+        D1["Claude reads both, refines"]
+        D2["Codex reads both, refines"]
     end
 
-    D --> D1 & D2 & D3
+    D --> D1 & D2
     D1 --> E1["claude-refined.md"]
     D2 --> E2["codex-refined.md"]
-    D3 --> E3["gemini-refined.md"]
 
-    E1 & E2 & E3 --> F["Phase 3: Synthesis"]
+    E1 & E2 --> F["Phase 3: Synthesis"]
 
     subgraph Phase3["Phase 3 — Final Synthesis"]
         F1["Claude synthesizes all refined reports"]
@@ -65,7 +63,7 @@ flowchart TD
 
 ## Prerequisites
 
-You need all three coding CLIs installed and authenticated:
+You need both coding CLIs installed and authenticated:
 
 ### Claude Code
 ```bash
@@ -77,12 +75,6 @@ claude --version
 ```bash
 npm install -g @openai/codex
 codex login
-```
-
-### Gemini CLI (Google)
-```bash
-npm install -g @google/gemini-cli
-gemini  # Run once to set up authentication
 ```
 
 ### jq (JSON processor)
@@ -154,10 +146,8 @@ research/20260222-143000-a1b2c3/
 ├── progress.log          # Live progress from all agents
 ├── claude-report.md      # Phase 1: Claude's initial research
 ├── codex-report.md       # Phase 1: Codex's initial research
-├── gemini-report.md      # Phase 1: Gemini's initial research
 ├── claude-refined.md     # Phase 2: Claude's cross-pollinated refinement
 ├── codex-refined.md      # Phase 2: Codex's cross-pollinated refinement
-├── gemini-refined.md     # Phase 2: Gemini's cross-pollinated refinement
 └── final-report.md       # Phase 3: Synthesized final report
 ```
 
@@ -169,9 +159,6 @@ research/20260222-143000-a1b2c3/
 |-------|-------|-----------|
 | Claude | `claude-opus-4-6` | effort: max |
 | Codex | `gpt-5.3-codex` | reasoning_effort: xhigh |
-| Gemini | `gemini-2.5-pro` | thinkingBudget: 24576 |
-
-> **Note:** We plan to move to [Gemini 3.1](https://ai.google.dev/gemini-api/docs/gemini-3) once it moves out of preview.
 
 ### Test mode (`--test`)
 
@@ -179,7 +166,6 @@ research/20260222-143000-a1b2c3/
 |-------|-------|-----------|
 | Claude | `claude-haiku-4-5-20251001` | effort: low |
 | Codex | `gpt-5.1-codex-mini` | reasoning_effort: low |
-| Gemini | `gemini-2.5-flash-lite` | default |
 
 ## How the Loop Mechanisms Work
 
@@ -187,31 +173,26 @@ Each agent iterates on its research using the best available mechanism for that 
 
 - **Claude**: Native [Stop hook](https://docs.anthropic.com/en/docs/claude-code/hooks) — blocks exit and feeds a "keep researching" prompt back until the agent marks its report complete
 - **Codex**: Bash wrapper loop with `codex exec resume --last` — since Codex lacks hooks, we wrap it in an external loop that checks for completion between iterations
-- **Gemini**: Native [AfterAgent hook](https://geminicli.com/docs/hooks/) — rejects the response and forces retry with a continuation prompt until complete
 
 Each agent signals completion by writing `<!-- RESEARCH_COMPLETE -->` at the end of its report.
 
 ## Troubleshooting
 
 ### "Missing required CLI tools"
-Install the missing tools listed in the error. All three CLIs (claude, codex, gemini) plus jq must be available on PATH.
+Install the missing tools listed in the error. Both CLIs (claude, codex) plus jq must be available on PATH.
 
 ### "codex may not be authenticated"
 Run `codex login` to authenticate with your OpenAI account.
-
-### "gemini may not be authenticated"
-Run `gemini` once interactively to complete OAuth, or set `GEMINI_API_KEY`.
 
 ### No reports produced
 Check the agent stdout logs in `research/<id>/`:
 - `claude-stdout.log`
 - `codex-stdout.log`
-- `gemini-stdout.log`
 
 Common causes: authentication failures, model not available on your subscription tier, network issues.
 
-### An agent failed (e.g., Gemini 503)
-Individual agent failures are tolerated — the failed agent is skipped and the remaining agents continue. The final synthesis will note reduced coverage. Check the agent's stdout log for details.
+### An agent failed
+Individual agent failures are tolerated — the failed agent is skipped and the remaining agent continues. The final synthesis will note reduced coverage. Check the agent's stdout log for details.
 
 ### Research seems stuck
 Monitor `research/<id>/progress.log`. If an agent is stuck, you can cancel with `/research-council:cancel-research` and try again. The orchestrator has a 2-hour timeout as a safety net.
@@ -226,9 +207,9 @@ Run `/research-council:cancel-research` first, or check if a previous session is
 
 The plugin uses Claude Code's Stop hook for orchestration. When you run `/research-council:deep-research`, the command creates a state file and finishes. The Stop hook then takes over:
 
-1. Launches all 3 research agents as parallel child processes
+1. Launches both research agents as parallel child processes
 2. Waits for all to complete
-3. Launches all 3 refinement agents in parallel
+3. Launches both refinement agents in parallel
 4. Waits for all to complete
 5. Returns control to Claude with a synthesis prompt
 

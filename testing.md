@@ -10,15 +10,15 @@ Run with:
 bash scripts/test-refactoring.sh
 ```
 
-Tests 5 groups (45 tests total):
+Tests 5 groups:
 
-1. **iteration-hook.sh** — Verifies both Claude and Gemini output formats, completion marker detection, max iteration limits, missing env var handling, non-numeric state reset, and iteration counter increments.
+1. **iteration-hook.sh** — Verifies Claude output format, completion marker detection, max iteration limits, missing env var handling, non-numeric state reset, and iteration counter increments.
 
 2. **lib/phase-common.sh** — Tests `register_agent`/`agent_pid`/`agent_log` registry, `record_pids` writing PID files, and `check_log_for_fatal_errors` detecting quota/auth patterns while passing clean logs.
 
 3. **sedi() helper** — Tests portable `sed -i` replacement, variable substitution, and preservation of other lines.
 
-4. **No stale references** — Ensures phase scripts reference `iteration-hook.sh` (not the old `claude-stop-hook.sh` or `gemini-afteragent-hook.sh`), set `RESEARCH_HOOK_FORMAT` for both Claude and Gemini, don't contain dead `kill_tree` code, and source `phase-common.sh`.
+4. **No stale references** — Ensures phase scripts reference `iteration-hook.sh` (not the old `claude-stop-hook.sh` or `gemini-afteragent-hook.sh`), don't contain dead `kill_tree` code, source `phase-common.sh`, and have no leftover gemini references.
 
 5. **Syntax checks** — Runs `bash -n` on all scripts to catch parse errors.
 
@@ -28,7 +28,7 @@ Tests 5 groups (45 tests total):
 
 ```bash
 # 1. Clean up any stale session first
-ps aux | grep -E "claude -p|codex exec|gemini " | grep -v grep | awk '{print $2}' | xargs kill 2>/dev/null
+ps aux | grep -E "claude -p|codex exec" | grep -v grep | awk '{print $2}' | xargs kill 2>/dev/null
 rm -f .claude/deep-research.local.md .claude/deep-research.lock
 
 # 2. Launch in tmux with output capture
@@ -43,8 +43,8 @@ tmux ls                                     # session exists = still running
 
 | Phase | Typical duration | What to expect |
 |-------|-----------------|----------------|
-| Phase 0: Smoke tests | ~35-40s | Claude smoke test is slowest (~35s). Codex/Gemini are fast (~2-4s) |
-| Phase 1: Research | ~2-5 min | Codex finishes first (~1 min). Claude (Haiku) takes ~4 min. Gemini may fail on quota |
+| Phase 0: Smoke tests | ~35-40s | Claude smoke test is slowest (~35s). Codex is fast (~2-4s) |
+| Phase 1: Research | ~2-5 min | Codex finishes first (~1 min). Claude (Haiku) takes ~4 min |
 | Phase 2: Refinement | ~5-8 min | Only runs agents that produced Phase 1 reports. Claude is slowest |
 | Phase 3: Synthesis | ~2-3 min | Single Claude agent synthesizes all refined reports |
 | **Total** | **~10-15 min** | Varies by API latency and quota availability |
@@ -59,7 +59,7 @@ tail -f /tmp/e2e-test-output.log
 grep "^\[" research/<id>/progress.log | tail -20
 
 # Verify agents are alive (not hanging)
-ps aux | grep -E "claude -p|codex exec|gemini " | grep -v grep
+ps aux | grep -E "claude -p|codex exec" | grep -v grep
 
 # Check agent stdout log sizes (growing = actively working)
 wc -l research/<id>/*-stdout.log research/<id>/*-refine-stdout.log 2>/dev/null
@@ -76,7 +76,7 @@ tmux ls                                           # session exists = still runni
 # Kill a stuck test
 tmux kill-session -t e2e
 # Kill any orphaned agent processes
-ps aux | grep -E "claude -p|codex exec|gemini " | grep -v grep | awk '{print $2}' | xargs kill 2>/dev/null
+ps aux | grep -E "claude -p|codex exec" | grep -v grep | awk '{print $2}' | xargs kill 2>/dev/null
 # Remove stale state
 rm -f .claude/deep-research.local.md .claude/deep-research.lock
 ```
@@ -84,14 +84,13 @@ rm -f .claude/deep-research.local.md .claude/deep-research.lock
 #### Common blockers
 
 - **"A research session is already active"** — A previous session left state behind. Run the cleanup commands above before launching.
-- **Gemini quota errors** — Gemini CLI hits rate limits frequently. The fatal error detector kills it correctly; the test continues with Claude + Codex only. This is expected behavior, not a test failure.
 - **Claude stdout log empty** — Output buffering. The process is likely alive and working. Verify with `ps`.
 
 #### What counts as a pass
 
-The test succeeds if `run-e2e-test.sh` prints `SUCCESS: Final report written` and exits 0. Partial agent failures (e.g., Gemini quota) are tolerated as long as at least 2/3 agents produce reports.
+The test succeeds if `run-e2e-test.sh` prints `SUCCESS: Final report written` and exits 0. Individual agent failures are tolerated as long as at least 1 agent produces a report (though typically both succeed).
 
-This runs the full 4-phase pipeline (setup, research, refinement, synthesis) using `--test` mode, which selects cheap/fast models (Haiku, codex-mini, flash-lite) and limits to 2 iterations.
+This runs the full 4-phase pipeline (setup, research, refinement, synthesis) using `--test` mode, which selects cheap/fast models (Haiku, codex-mini) and limits to 2 iterations.
 
 **Important: plugin cache synchronization.** The e2e test script runs from the local `scripts/` directory, but if you've been running `/deep-research` via the Claude Code plugin, the orchestrator uses scripts from `~/.claude/plugins/cache/research-council/...`. After modifying scripts locally, either:
 - Run `claude /install-plugin .` to update the plugin cache, OR
@@ -106,7 +105,6 @@ The `--test` flag on `setup-research.sh` configures:
 - `claude_model: claude-haiku-4-5-20251001` (vs opus)
 - `codex_model: gpt-5.1-codex-mini` (vs gpt-5.3-codex)
 - `codex_reasoning: low` (vs xhigh)
-- `gemini_model: gemini-2.5-flash-lite` (vs gemini-2.5-pro)
 
 Test mode is propagated to child scripts via `RESEARCH_TEST_MODE=true`, which also sets `--effort low` on Claude subagent launches.
 
@@ -121,10 +119,8 @@ Each research session creates a workspace at `research/<research-id>/` containin
 | `progress.log` | Main progress log — timestamped entries from all phases |
 | `claude-stdout.log` | Claude agent's raw stdout/stderr (Phase 1) |
 | `codex-stdout.log` | Codex agent's raw stdout/stderr (Phase 1) |
-| `gemini-stdout.log` | Gemini agent's raw stdout/stderr (Phase 1) |
 | `claude-refine-stdout.log` | Claude refinement stdout (Phase 2) |
 | `codex-refine-stdout.log` | Codex refinement stdout (Phase 2) |
-| `gemini-refine-stdout.log` | Gemini refinement stdout (Phase 2) |
 | `synthesis-stdout.log` | Synthesis agent stdout (Phase 3, e2e only) |
 
 The orchestrator also writes to `.claude/deep-research.log`.
@@ -137,7 +133,6 @@ tail -f research/<id>/progress.log
 
 # Watch a specific agent
 tail -f research/<id>/claude-stdout.log
-tail -f research/<id>/gemini-stdout.log
 ```
 
 ### Common Failure Patterns
@@ -148,7 +143,6 @@ tail -f research/<id>/gemini-stdout.log
   ```bash
   claude -p --model claude-haiku-4-5-20251001 --max-turns 1 'Reply with OK'
   codex exec --model gpt-5.1-codex-mini --full-auto --skip-git-repo-check 'Reply with OK'
-  gemini -p 'Reply with OK' --model gemini-2.5-flash-lite
   ```
 
 **Agent killed mid-run with "FATAL ERROR in logs"**
@@ -189,7 +183,6 @@ cat research/<id>/agent-pids.txt
 
 # Iteration state for an agent
 cat research/<id>/claude-state.txt
-cat research/<id>/gemini-state.txt
 ```
 
 ### Cancellation
@@ -209,7 +202,7 @@ rm -f .claude/deep-research.local.md .claude/deep-research.lock
 
 ### Unified iteration hook (`iteration-hook.sh`)
 
-Claude and Gemini have different hook protocols — Claude's Stop hook expects `{"decision": "block"}` to continue (empty output + exit 0 to allow), while Gemini's AfterAgent hook expects `{"decision": "deny"}` to continue and `{"decision": "allow"}` to stop. Rather than maintaining two separate hook scripts, a single `iteration-hook.sh` uses the `RESEARCH_HOOK_FORMAT` env var to switch output format. Codex has no hook system at all, so it uses a bash loop wrapper (`codex-wrapper.sh`) instead.
+The iteration hook uses Claude's Stop hook protocol — it outputs `{"decision": "block"}` to continue (empty output + exit 0 to allow). Codex has no hook system at all, so it uses a bash loop wrapper (`codex-wrapper.sh`) instead.
 
 ### Shared phase library (`lib/phase-common.sh`)
 
@@ -230,10 +223,6 @@ When a new Claude Code session encounters an in-progress research state from a d
 ### Portable `sedi()` helper
 
 macOS `sed -i` requires an empty string argument (`sed -i ''`) while GNU `sed -i` does not. The `sedi()` function in the orchestrator hook handles this transparently. Defined inline rather than sourced from a library because the orchestrator hook must be self-contained.
-
-### Gemini sandboxing workaround
-
-Gemini CLI runs in a sandbox that can't read files outside its working directory. The phase scripts copy input reports INTO a dedicated Gemini workspace directory, and copy the output report back out after Gemini finishes. This is why you see `gemini-workspace/` subdirectories and file copying in the phase scripts.
 
 ## Pitfalls & Lessons Learned
 
@@ -257,14 +246,12 @@ Gemini CLI runs in a sandbox that can't read files outside its working directory
 
 7. **Claude smoke test takes ~35 seconds.** Even with Haiku and a trivial prompt, Claude CLI startup + response takes 30-35s. The smoke test timeout is 60s to account for this.
 
-8. **Gemini CLI retries quota errors forever.** When Gemini hits quota exhaustion or rate limits, it enters an internal retry loop and the process never exits. The `check_log_for_fatal_errors()` function in `phase-common.sh` scans agent stdout logs every 5 seconds for fatal patterns and kills the agent immediately. Without this, a quota-exhausted Gemini will spin indefinitely.
-
-9. **Zsh glob expansion on special characters.** If a research topic contains `?`, `*`, `[`, or other glob characters, zsh will try to expand them. The command template wraps `$ARGUMENTS` with `set -o noglob` / `set +o noglob` to prevent this.
+8. **Zsh glob expansion on special characters.** If a research topic contains `?`, `*`, `[`, or other glob characters, zsh will try to expand them. The command template wraps `$ARGUMENTS` with `set -o noglob` / `set +o noglob` to prevent this.
 
 ### E2E testing workflow
 
-10. **Always use `grep "^\["` to read progress logs.** The progress log can get polluted with agent stdout when Codex writes reports via heredoc (the `tee -a` in `log()` sometimes captures stray output). Filtering for timestamped `[` entries gives clean structured output.
+9. **Always use `grep "^\["` to read progress logs.** The progress log can get polluted with agent stdout when Codex writes reports via heredoc (the `tee -a` in `log()` sometimes captures stray output). Filtering for timestamped `[` entries gives clean structured output.
 
-11. **Kill orphaned agents after aborting.** Killing the e2e test script (`Ctrl-C` or `tmux kill-session`) does NOT automatically kill child agent processes. Always check for and kill orphaned `claude -p`, `codex exec`, and `gemini` processes afterward.
+10. **Kill orphaned agents after aborting.** Killing the e2e test script (`Ctrl-C` or `tmux kill-session`) does NOT automatically kill child agent processes. Always check for and kill orphaned `claude -p` and `codex exec` processes afterward.
 
-12. **Don't mix plugin cache and local scripts.** The `/deep-research` slash command runs scripts from `~/.claude/plugins/cache/...`. The `run-e2e-test.sh` script runs from the local `scripts/` directory. Running both against the same research workspace creates duplicate Phase 1 processes fighting over the same output files.
+11. **Don't mix plugin cache and local scripts.** The `/deep-research` slash command runs scripts from `~/.claude/plugins/cache/...`. The `run-e2e-test.sh` script runs from the local `scripts/` directory. Running both against the same research workspace creates duplicate Phase 1 processes fighting over the same output files.

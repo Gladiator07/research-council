@@ -2,8 +2,8 @@
 # Deep Research Council — Orchestrator Stop Hook
 #
 # Phase state machine:
-#   research   → run 3 parallel research agents → refinement
-#   refinement → run 3 parallel refinement agents → synthesis
+#   research   → run 2 parallel research agents → refinement
+#   refinement → run 2 parallel refinement agents → synthesis
 #   synthesis  → check for final report → allow exit
 #
 # Fail-open: on any unexpected error, allow exit (never trap the user).
@@ -52,7 +52,6 @@ MAX_ITERS=$(parse_field "max_iterations")
 CLAUDE_MODEL=$(parse_field "claude_model")
 CODEX_MODEL=$(parse_field "codex_model")
 CODEX_REASONING=$(parse_field "codex_reasoning")
-GEMINI_MODEL=$(parse_field "gemini_model")
 
 # Not active → clean up
 if [ "$ACTIVE" != "true" ]; then
@@ -186,14 +185,13 @@ run_research() {
     "$MAX_ITERS" \
     "$CLAUDE_MODEL" \
     "$CODEX_MODEL" \
-    "$CODEX_REASONING" \
-    "$GEMINI_MODEL"
+    "$CODEX_REASONING"
   RESULT=$?
   log "Phase 1 finished (exit $RESULT)"
 
   # Check if any reports were produced
   REPORTS_FOUND=0
-  for f in "${WORKSPACE}/claude-report.md" "${WORKSPACE}/codex-report.md" "${WORKSPACE}/gemini-report.md"; do
+  for f in "${WORKSPACE}/claude-report.md" "${WORKSPACE}/codex-report.md"; do
     [ -f "$f" ] && [ -s "$f" ] && REPORTS_FOUND=$((REPORTS_FOUND + 1))
   done
 
@@ -202,8 +200,8 @@ run_research() {
     rm -f "$STATE_FILE"
     rm -f "$LOCK_FILE"
     REASON="ERROR: No research reports were produced by any agent. Check ${WORKSPACE}/progress.log and the agent stdout logs for errors. Common issues:
-- CLI authentication not set up (run 'codex login', 'gemini' to auth)
-- API keys not configured
+- Codex CLI not authenticated (run 'codex login')
+- Claude API key not configured
 - Model names not available on your subscription tier
 
 Review the logs and try again with /deep-research"
@@ -225,19 +223,18 @@ run_refinement() {
     "$MAX_ITERS" \
     "$CLAUDE_MODEL" \
     "$CODEX_MODEL" \
-    "$CODEX_REASONING" \
-    "$GEMINI_MODEL"
+    "$CODEX_REASONING"
   REFINE_RESULT=$?
   log "Phase 2 finished (exit $REFINE_RESULT)"
 
   # Build list of available refined reports and track which agents succeeded
   REPORT_LIST=""
   MISSING_LIST=""
-  AGENT_NAMES=("Claude" "Codex" "Gemini")
-  AGENT_FILES=("${WORKSPACE}/claude-refined.md" "${WORKSPACE}/codex-refined.md" "${WORKSPACE}/gemini-refined.md")
+  AGENT_NAMES=("Claude" "Codex")
+  AGENT_FILES=("${WORKSPACE}/claude-refined.md" "${WORKSPACE}/codex-refined.md")
   AVAILABLE_COUNT=0
 
-  for i in 0 1 2; do
+  for i in 0 1; do
     f="${AGENT_FILES[$i]}"
     name="${AGENT_NAMES[$i]}"
     if [ -f "$f" ] && [ -s "$f" ]; then
@@ -274,7 +271,7 @@ NOTE: Not all agents produced reports. Missing:${MISSING_LIST}
 Your synthesis should note this reduced coverage in the Methodology section."
   fi
 
-  SYNTHESIS_PROMPT="Research and refinement phases are complete. ${AVAILABLE_COUNT} of 3 AI agents produced refined reports.
+  SYNTHESIS_PROMPT="Research and refinement phases are complete. ${AVAILABLE_COUNT} of 2 AI agents produced refined reports.
 
 Topic: ${TOPIC}
 ${COVERAGE_NOTE}
@@ -288,7 +285,7 @@ Structure the synthesis as:
 3. **Areas of Consensus** — where agents agree, with combined supporting evidence
 4. **Areas of Disagreement** — where agents differed, with analysis of why and which view is better supported
 5. **Novel Insights** — unique findings that emerged from the cross-pollination refinement round
-6. **Open Questions** — what remains uncertain even after three independent investigations
+6. **Open Questions** — what remains uncertain even after two independent investigations
 7. **Sources** — comprehensive, deduplicated list of all URLs and references from all reports
 8. **Methodology** — brief description of the multi-agent research process
 
