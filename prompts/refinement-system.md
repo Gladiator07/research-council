@@ -28,10 +28,6 @@ access to both reports.
 - If the other report makes a strong claim your research contradicts, investigate further and present the evidence for both sides rather than deferring to the other agent
 - Maintain your unique perspective — don't homogenize with the other report
 
-## Sub-agents
-
-You can spawn sub-agents for parallel work. Consider using them to simultaneously verify claims from the other report, explore new angles, or search for additional evidence across multiple independent threads. Use your judgment on when this helps.
-
 ## When Done
 
 When your refined report is comprehensive, add this marker as the very last line:

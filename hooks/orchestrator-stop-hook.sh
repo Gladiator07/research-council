@@ -4,7 +4,8 @@
 # Phase state machine:
 #   research   → run 2 parallel research agents → refinement
 #   refinement → run 2 parallel refinement agents → synthesis
-#   synthesis  → check for final report → allow exit
+#   synthesis  → run 1 Claude synthesis agent → complete
+#   complete   → allow exit
 #
 # Fail-open: on any unexpected error, allow exit (never trap the user).
 
@@ -123,7 +124,7 @@ fi
 STARTED_AT=$(parse_field "started_at")
 if [ -n "$STARTED_AT" ]; then
   if [[ "$OSTYPE" == "darwin"* ]]; then
-    STARTED_EPOCH=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$STARTED_AT" +%s 2>/dev/null || echo 0)
+    STARTED_EPOCH=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$STARTED_AT" +%s 2>/dev/null || echo 0)
   else
     STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || echo 0)
   fi
@@ -227,7 +228,34 @@ run_refinement() {
   REFINE_RESULT=$?
   log "Phase 2 finished (exit $REFINE_RESULT)"
 
-  # Build list of available refined reports and track which agents succeeded
+  # Check if any refined reports were produced
+  REFINED_COUNT=0
+  for f in "${WORKSPACE}/claude-refined.md" "${WORKSPACE}/codex-refined.md"; do
+    [ -f "$f" ] && [ -s "$f" ] && REFINED_COUNT=$((REFINED_COUNT + 1))
+  done
+
+  if [ "$REFINED_COUNT" -eq 0 ]; then
+    log "FATAL: No refined reports produced in Phase 2"
+    rm -f "$STATE_FILE"
+    release_lock
+    REASON="ERROR: Refinement phase failed — no refined reports were produced by any agent. Check ${WORKSPACE}/progress.log and agent stdout logs for errors.
+
+Review the logs and try again with /deep-research"
+    jq -n --arg r "$REASON" '{decision:"block", reason:$r}'
+    return
+  fi
+
+  # Update state to synthesis
+  sedi 's/^phase: refinement$/phase: synthesis/' "$STATE_FILE"
+
+  # Fall through to synthesis
+}
+
+# ── Phase: synthesis (automated sub-agent) ────────────────────────────────
+run_synthesis() {
+  log "Starting Phase 3: Synthesis"
+
+  # Build report list and coverage note from refined reports
   REPORT_LIST=""
   MISSING_LIST=""
   AGENT_NAMES=("Claude" "Codex")
@@ -244,69 +272,65 @@ run_refinement() {
     else
       name_lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
       MISSING_LIST="${MISSING_LIST}
-- ${name}: no report produced (check ${WORKSPACE}/${name_lower}-stdout.log for errors)"
+- ${name}: no report (check ${WORKSPACE}/${name_lower}-refine-stdout.log)"
     fi
   done
 
-  # Don't advance to synthesis if no refined reports exist
   if [ "$AVAILABLE_COUNT" -eq 0 ]; then
-    log "FATAL: No refined reports produced in Phase 2"
+    log "FATAL: No refined reports available for synthesis"
     rm -f "$STATE_FILE"
     release_lock
-    REASON="ERROR: Refinement phase failed — no refined reports were produced by any agent. Check ${WORKSPACE}/progress.log and agent stdout logs for errors.
-
-Review the logs and try again with /deep-research"
+    REASON="ERROR: No refined reports found for synthesis. Check ${WORKSPACE}/progress.log for errors."
     jq -n --arg r "$REASON" '{decision:"block", reason:$r}'
     return
   fi
 
-  # Update state to synthesis
-  sedi 's/^phase: refinement$/phase: synthesis/' "$STATE_FILE"
-
   COVERAGE_NOTE=""
   if [ -n "$MISSING_LIST" ]; then
     COVERAGE_NOTE="
+
 NOTE: Not all agents produced reports. Missing:${MISSING_LIST}
 
 Your synthesis should note this reduced coverage in the Methodology section."
   fi
 
-  SYNTHESIS_PROMPT="Research and refinement phases are complete. ${AVAILABLE_COUNT} of 2 AI agents produced refined reports.
+  bash "${PLUGIN_ROOT}/scripts/run-synthesis-phase.sh" \
+    "$RESEARCH_ID" \
+    "$TOPIC" \
+    "$CLAUDE_MODEL" \
+    "$REPORT_LIST" \
+    "$COVERAGE_NOTE"
+  SYNTH_RESULT=$?
+  log "Phase 3 finished (exit $SYNTH_RESULT)"
 
-Topic: ${TOPIC}
-${COVERAGE_NOTE}
-Read the available refined reports:${REPORT_LIST}
-
-Synthesize everything into: ${WORKSPACE}/final-report.md
-
-Structure the synthesis as:
-1. **Executive Summary** — the most important findings across all investigations
-2. **Key Findings** — organized by THEME (not by source agent), combining the strongest evidence
-3. **Areas of Consensus** — where agents agree, with combined supporting evidence
-4. **Areas of Disagreement** — where agents differed, with analysis of why and which view is better supported
-5. **Novel Insights** — unique findings that emerged from the cross-pollination refinement round
-6. **Open Questions** — what remains uncertain even after two independent investigations
-7. **Sources** — comprehensive, deduplicated list of all URLs and references from all reports
-8. **Methodology** — brief description of the multi-agent research process
-
-Be thorough. This is the final deliverable."
-
-  SYS_MSG="Research Council [${RESEARCH_ID}] — Phase 3/3: Synthesis"
-
-  jq -n --arg r "$SYNTHESIS_PROMPT" --arg s "$SYS_MSG" \
-    '{decision:"block", reason:$r, systemMessage:$s}'
-}
-
-# ── Phase: synthesis ─────────────────────────────────────────────────────
-check_synthesis() {
+  # Verify final report exists and has completion marker
   FINAL="${WORKSPACE}/final-report.md"
   if [ -f "$FINAL" ] && [ -s "$FINAL" ]; then
     log "Synthesis complete: ${FINAL} ($(wc -l < "$FINAL") lines)"
-    rm -f "$STATE_FILE"
-    printf '{"decision":"approve"}\n'
+    sedi 's/^phase: synthesis$/phase: complete/' "$STATE_FILE"
+    sedi 's/^active: true$/active: false/' "$STATE_FILE"
   else
-    REASON="Please write the synthesis report to ${WORKSPACE}/final-report.md by reading all refined reports in ${WORKSPACE}/. See the instructions above."
+    log "ERROR: synthesis agent finished but final-report.md not found or empty"
+    REASON="ERROR: Synthesis agent failed to produce final-report.md. Check ${WORKSPACE}/synthesis-stdout.log for errors.
+
+Review the logs and try again with /deep-research"
     jq -n --arg r "$REASON" '{decision:"block", reason:$r}'
+  fi
+}
+
+# ── Phase: synthesis (safety net — normally handled by run_synthesis fall-through) ──
+check_synthesis() {
+  FINAL="${WORKSPACE}/final-report.md"
+  if [ -f "$FINAL" ] && [ -s "$FINAL" ]; then
+    log "Synthesis verified: ${FINAL} ($(wc -l < "$FINAL") lines)"
+    sedi 's/^active: true$/active: false/' "$STATE_FILE"
+    sedi 's/^phase: synthesis$/phase: complete/' "$STATE_FILE"
+    exit 0
+  else
+    # Synthesis sub-agent didn't produce the file — run it
+    acquire_lock
+    run_synthesis
+    release_lock
   fi
 }
 
@@ -322,17 +346,30 @@ case "$PHASE" in
     if [ "$(parse_field "phase")" = "refinement" ]; then
       run_refinement
     fi
+    # Fall through to synthesis if refinement succeeded
+    if [ "$(parse_field "phase")" = "synthesis" ]; then
+      run_synthesis
+    fi
     release_lock
     ;;
 
   refinement)
     acquire_lock
     run_refinement
+    # Fall through to synthesis if refinement succeeded
+    if [ "$(parse_field "phase")" = "synthesis" ]; then
+      run_synthesis
+    fi
     release_lock
     ;;
 
   synthesis)
     check_synthesis
+    ;;
+
+  complete)
+    # All done — allow exit
+    exit 0
     ;;
 
   *)

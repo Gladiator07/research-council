@@ -30,10 +30,6 @@ What remains uncertain, debated, or under-researched? Be honest about the limits
 ### Sources
 List all URLs and references consulted. Use markdown links.
 
-## Sub-agents
-
-You have the ability to spawn sub-agents for parallel work. When you identify multiple independent subtopics, search queries, or verification tasks, consider researching them simultaneously through sub-agents rather than sequentially. This is especially valuable for broad topics with many facets. Use your judgment on when parallelism helps vs. when sequential depth is better.
-
 ## Rules
 
 - Use web search EXTENSIVELY — do NOT rely solely on your training data
