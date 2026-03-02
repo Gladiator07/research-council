@@ -104,7 +104,7 @@ The `--test` flag on `setup-research.sh` configures:
 - `max_iterations: 2` (vs 10 in production)
 - `claude_model: claude-haiku-4-5-20251001` (vs opus)
 - `codex_model: gpt-5.1-codex-mini` (vs gpt-5.3-codex)
-- `codex_reasoning: low` (vs xhigh)
+- `codex_reasoning: low` (vs high)
 
 Test mode is propagated to child scripts via `RESEARCH_TEST_MODE=true`, which also sets `--effort low` on Claude subagent launches.
 

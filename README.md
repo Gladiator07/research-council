@@ -158,7 +158,7 @@ research/20260222-143000-a1b2c3/
 | Agent | Model | Reasoning |
 |-------|-------|-----------|
 | Claude | `claude-opus-4-6` | effort: max |
-| Codex | `gpt-5.3-codex` | reasoning_effort: xhigh |
+| Codex | `gpt-5.3-codex` | reasoning_effort: high |
 
 ### Test mode (`--test`)
 

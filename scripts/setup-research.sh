@@ -222,7 +222,7 @@ else
   MAX_ITERS=10
   CLAUDE_MODEL="claude-opus-4-6"
   CODEX_MODEL="gpt-5.3-codex"
-  CODEX_REASONING="xhigh"
+  CODEX_REASONING="high"
   MODE_LABEL="PRODUCTION (maximum reasoning depth)"
 fi
 

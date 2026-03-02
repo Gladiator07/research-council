@@ -13,7 +13,7 @@ INITIAL_PROMPT="$1"
 REPORT="$2"
 MAX_ITERS="${3:-10}"
 MODEL="${4:-gpt-5.3-codex}"
-REASONING="${5:-xhigh}"
+REASONING="${5:-high}"
 PROGRESS_LOG="${6:-/dev/null}"
 TOPIC="${7:-(research)}"
 
