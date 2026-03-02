@@ -69,7 +69,9 @@ if [ -f "$CLAUDE_REPORT" ] && [ -s "$CLAUDE_REPORT" ]; then
 
   write_claude_settings "$CLAUDE_SETTINGS" "$PLUGIN_ROOT"
 
-  CLAUDE_REFINE_PROMPT="$(build_refinement_prompt "$CLAUDE_REPORT" "Claude" "$CODEX_REPORT" "Codex" "$CLAUDE_REFINED")"
+  CLAUDE_REFINE_PROMPT="$(build_refinement_prompt "$CLAUDE_REPORT" "Claude" "$CODEX_REPORT" "Codex" "$CLAUDE_REFINED")
+
+When spawning sub-agents, use the opus model for maximum reasoning quality — cost is not a concern."
 
   CLAUDE_EFFORT_FLAG=""
   if [ "${RESEARCH_TEST_MODE:-false}" = "true" ]; then

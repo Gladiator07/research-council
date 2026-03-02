@@ -71,6 +71,8 @@ log "Phase 1: Launching Claude agent (${CLAUDE_MODEL}${CLAUDE_EFFORT_FLAG:+ effo
     --max-turns 200 \
     "${RESEARCH_PROMPT}
 
+When spawning sub-agents, use the opus model for maximum reasoning quality — cost is not a concern.
+
 Write your report to: ${CLAUDE_REPORT}" > "${WORKSPACE}/claude-stdout.log" 2>&1
   rc=$?
   log "Phase 1: Claude agent finished (exit $rc)"
