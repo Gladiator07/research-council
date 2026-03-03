@@ -143,12 +143,17 @@ Reports are saved to `research/<id>/`:
 
 ```
 research/20260222-143000-a1b2c3/
-├── progress.log          # Live progress from all agents
-├── claude-report.md      # Phase 1: Claude's initial research
-├── codex-report.md       # Phase 1: Codex's initial research
-├── claude-refined.md     # Phase 2: Claude's cross-pollinated refinement
-├── codex-refined.md      # Phase 2: Codex's cross-pollinated refinement
-└── final-report.md       # Phase 3: Synthesized final report
+├── progress.log              # Live progress from all agents
+├── claude-report.md          # Phase 1: Claude's initial research
+├── codex-report.md           # Phase 1: Codex's initial research
+├── claude-refined.md         # Phase 2: Claude's cross-pollinated refinement
+├── codex-refined.md          # Phase 2: Codex's cross-pollinated refinement
+├── final-report.md           # Phase 3: Synthesized final report
+├── claude-stdout.log         # Claude Phase 1 agent output
+├── codex-stdout.log          # Codex Phase 1 agent output
+├── claude-refine-stdout.log  # Claude Phase 2 agent output
+├── codex-refine-stdout.log   # Codex Phase 2 agent output
+└── synthesis-stdout.log      # Phase 3 synthesis agent output
 ```
 
 ## Models Used
@@ -205,15 +210,16 @@ Run `/research-council:cancel-research` first, or check if a previous session is
 
 ## Architecture
 
-The plugin uses Claude Code's Stop hook for orchestration. When you run `/research-council:deep-research`, the command creates a state file and finishes. The Stop hook then takes over:
+The plugin uses Claude Code's Stop hook for orchestration. When you run `/research-council:deep-research`, the command creates a state file and finishes. The Stop hook then takes over and runs all three phases sequentially:
 
 1. Launches both research agents as parallel child processes
 2. Waits for all to complete
 3. Launches both refinement agents in parallel
 4. Waits for all to complete
-5. Returns control to Claude with a synthesis prompt
+5. Launches a dedicated Claude synthesis sub-agent
+6. Waits for synthesis to complete and marks the session as done
 
-This design avoids the 10-minute Bash tool timeout limitation — the Stop hook has a 2-hour timeout, giving agents plenty of time for deep research.
+All three phases run entirely within the Stop hook — no control is returned to the main session until the final report is written. This design avoids the 10-minute Bash tool timeout limitation — the Stop hook has a 2-hour timeout, giving agents plenty of time for deep research.
 
 ## License
 
