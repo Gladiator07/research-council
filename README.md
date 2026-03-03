@@ -90,13 +90,13 @@ sudo apt install jq
 
 ### From the command line
 ```bash
-claude plugin marketplace add hamelsmu/research-council
+claude plugin marketplace add Gladiator07/research-council
 claude plugin install research-council@research-council
 ```
 
 ### From within Claude Code
 ```
-/plugin marketplace add hamelsmu/research-council
+/plugin marketplace add Gladiator07/research-council
 /plugin install research-council@research-council
 ```
 
@@ -107,7 +107,7 @@ claude plugin update research-council@research-council
 
 ### Manual installation (for development)
 ```bash
-git clone https://github.com/hamelsmu/research-council.git
+git clone https://github.com/Gladiator07/research-council.git
 # Then in Claude Code:
 claude --plugin-dir /path/to/research-council
 ```
