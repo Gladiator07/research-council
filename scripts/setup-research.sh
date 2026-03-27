@@ -221,7 +221,7 @@ if [ "$TEST_MODE" = true ]; then
 else
   MAX_ITERS=10
   CLAUDE_MODEL="claude-opus-4-6"
-  CODEX_MODEL="gpt-5.3-codex"
+  CODEX_MODEL="gpt-5.4"
   CODEX_REASONING="high"
   MODE_LABEL="PRODUCTION (maximum reasoning depth)"
 fi
