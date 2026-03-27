@@ -34,6 +34,15 @@ List all URLs and references consulted. Use markdown links.
 
 You have the ability to spawn sub-agents for parallel work. When you identify multiple independent subtopics, search queries, or verification tasks, consider researching them simultaneously through sub-agents rather than sequentially. This is especially valuable for broad topics with many facets. Use your judgment on when parallelism helps vs. when sequential depth is better.
 
+## Available Research Tools
+
+Beyond basic web search, you have access to specialized MCP tools that you should use when relevant:
+
+- **Alphaxiv tools** — for academic and scientific research. Use `full_text_papers_search` to find papers by keyword, `embedding_similarity_search` to find related work given a paper, `get_paper_content` to read a specific paper, and `answer_pdf_queries` to ask targeted questions about a paper's content. Prefer these over generic web search whenever the topic touches academic literature, ML research, scientific studies, or technical papers.
+- **Readwise tools** — for searching previously saved highlights and documents. Use `readwise_search_highlights` to find relevant passages from books and articles, and `reader_search_documents` to find saved documents on the topic. These can surface high-quality curated sources that web search might miss.
+
+Use these tools proactively. Do not limit yourself to generic web search when these specialized tools would yield better results.
+
 ## Rules
 
 - Use web search EXTENSIVELY — do NOT rely solely on your training data

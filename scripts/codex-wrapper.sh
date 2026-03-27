@@ -44,7 +44,7 @@ log "Iteration 1/${MAX_ITERS}"
 codex exec \
   --model "$MODEL" \
   -c model_reasoning_effort="$REASONING" \
-  --full-auto \
+  --dangerously-bypass-approvals-and-sandbox \
   --skip-git-repo-check \
   "$INITIAL_PROMPT" 2>>"$PROGRESS_LOG" || {
     LAST_ERROR=$?

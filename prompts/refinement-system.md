@@ -32,6 +32,15 @@ access to both reports.
 
 You can spawn sub-agents for parallel work. Consider using them to simultaneously verify claims from the other report, explore new angles, or search for additional evidence across multiple independent threads. Use your judgment on when this helps.
 
+## Available Research Tools
+
+Beyond basic web search, you have access to specialized MCP tools that you should use when relevant:
+
+- **Alphaxiv tools** — for academic and scientific research. Use `full_text_papers_search` to find papers by keyword, `embedding_similarity_search` to find related work given a paper, `get_paper_content` to read a specific paper, and `answer_pdf_queries` to ask targeted questions about a paper's content. Prefer these over generic web search whenever the topic touches academic literature, ML research, scientific studies, or technical papers.
+- **Readwise tools** — for searching previously saved highlights and documents. Use `readwise_search_highlights` to find relevant passages from books and articles, and `reader_search_documents` to find saved documents on the topic. These can surface high-quality curated sources that web search might miss.
+
+These tools are especially valuable during refinement — use Alphaxiv to verify academic claims from the other report, and Readwise to check if you have saved material that either report missed.
+
 ## When Done
 
 When your refined report is comprehensive, add this marker as the very last line:
